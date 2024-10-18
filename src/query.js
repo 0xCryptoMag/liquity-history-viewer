@@ -5,6 +5,8 @@
 
 const ethers = require('ethers');
 const abi = require('./abi.json'); // only includes VaultUpdated and TroveUpdated events
+const fs = require('fs');
+const path = require('path');
 
 // ---------- CONSTANTS ---------- //
 
@@ -45,14 +47,17 @@ const plsxDec = 18;
 /** @type {number} */
 const hexDec = 8;
 
+/** @type {number} */
+const LL_DEPLOY_BLOCK = 18971002;
+
 
 
 // ---------- ETHERS INSTANTIATIONS ---------- //
 
 /** @type {ethers.JsonRpcProvider | ethers.WebSocketProvider} */
-const provider = RPC_URL.includes('http') ? 
-    new ethers.JsonRpcProvider(RPC_URL) :
-    new ethers.WebSocketProvider(RPC_URL);
+const provider = RPC_URL.includes('wss') ? 
+    new ethers.WebSocketProvider(RPC_URL) :
+    new ethers.JsonRpcProvider(RPC_URL);
 
 
 /** @type {Object<string, Object<string, ethers.Contract>>} */
@@ -98,91 +103,123 @@ const BorrowerOperationEnum = [
  * @description Accepts the user inputs and returns liquidation info
  * @param {string} protocol The user selected protocol
  * @param {string} address The user supplied address
- * @returns {Promise<Object>}
+ * @returns {Promise<Object<string, (string | number | bigint)[][]>>}
  */
 async function query(protocol, address) {
-    /** @type {Object} */
+    /** @type {Object<string, (string | number | bigint)[][]>} */
     let payload = {};
 
-    // Get trove updates
+    // Get trove updates performed by the Trove Manager and Borrower Operations contracts, then sort them by blocknumber
     payload.troveManager = await getEventLogs(
         contracts[protocol].TM,
         protocol === 'LL' ? 'VaultUpdated' : 'TroveUpdated',
         address,
-        18971002,
+        LL_DEPLOY_BLOCK,
         'tm'
     );
     payload.borrowerOperations = await getEventLogs(
         contracts[protocol].BO,
         protocol === 'LL' ? 'VaultUpdated' : 'TroveUpdated',
         address,
-        18971002,
+        LL_DEPLOY_BLOCK,
         'bo'
-    );
+    ); // @ts-ignore that other values of a[n] and b[n] can be string
     payload.troveUpdates = [...payload.troveManager, ...payload.borrowerOperations].sort((a, b) => a[0] - b[0]);
 
-    // Get stability pool stake updates
-    payload.totalDepositUpdates = await getEventLogs(
-        contracts[protocol].SP,
-        protocol === 'LL' ? 'StabilityPoolUSDLBalanceUpdated' : 'StabilityPoolLUSDBalanceUpdated',
-        null,
-        18971002,
-        null
-    );
+
+    // Get stability pool stake updates, gets total deposits (needed to find the percentage of the pool owned by user), user balances, and all liquidation events
+    // The data returned for all StabilityPoolLUSDBalanceUpdated events is a large file and can take 5-10 mins pull, at time of writing this there were 120k events
+    // To handle this, an approach using a small database of previously queried values is used
+    payload.totalDepositLogs = await updateDatabase(protocol);
     payload.userDepositUpdates = await getEventLogs(
         contracts[protocol].SP,
         'UserDepositChanged',
-        null,
-        18971002,
+        address,
+        LL_DEPLOY_BLOCK,
         null
     );
     payload.liquidations = await getEventLogs(
         contracts[protocol].TM,
         'Liquidation',
         null,
-        18971002,
+        LL_DEPLOY_BLOCK,
         null
     );
 
     return payload;
+}
 
+/**
+ * @description Returns an array of EventLog arguments and blockNumbers of different events to different contracts
+ * @param {ethers.Contract} contract The contract to filter eventlogs for
+ * @param {string} eventName The name of the event to filter for
+ * @param {string?} eventIndexedArgs Address if needed to filter for the events
+ * @param {number} startBlock The block at which to start the query, for total LUSD in stability pool the output is quite large if starting from beginning
+ * @param {string?} tmORbo Will determine whether to use the enum of the Trove Manager or the Borrower Operations
+ * @returns {Promise<(string | number | bigint)[][]>}
+ * @async
+ */
+async function getEventLogs(contract, eventName, eventIndexedArgs, startBlock, tmORbo) {
+    /** @type {ethers.DeferredTopicFilter} */
+    const filter = contract.filters[eventName](eventIndexedArgs);
 
-    /**
-     * @description Returns an array of EventLog arguments and blockNumbers of different events to different contracts
-     * @param {ethers.Contract} contract The contract to filter eventlogs for
-     * @param {string} eventName The name of the event to filter for
-     * @param {string?} eventIndexedArgs Address if needed to filter for the events
-     * @param {number} startBlock The block at which to start the query, for total LUSD in stability pool the output is quite large if starting from beginning
-     * @param {string?} tmORbo Will determine whether to use the enum of the Trove Manager or the Borrower Operations
-     * @returns {Promise<(string | number | bigint)[][]>}
-     * @async
-     */
-    async function getEventLogs(contract, eventName, eventIndexedArgs, startBlock, tmORbo) {
-        /** @type {ethers.DeferredTopicFilter} */
-        const filter = contract.filters[eventName](eventIndexedArgs);
+    /** @type {ethers.EventLog[]} */ // @ts-ignore that sometimes queryFilter gives ethers.Logs[]
+    const events = await contract.queryFilter(filter, startBlock, 'latest');
 
-        /** @type {ethers.EventLog[]} */ // @ts-ignore that sometimes queryFilter gives ethers.Logs[]
-        const events = await contract.queryFilter(filter, startBlock, 'latest');
+    /** @type {(string | number | bigint)[][]} */
+    const eventArgs = events.map(({ blockNumber, args }) => {
+        /** @type {(string | number | bigint)[]} */
+        let arr = [blockNumber, ...args.toArray()];
 
-        /** @type {(string | number | bigint)[][]} */
-        const eventArgs = events.map(({ blockNumber, args }) => {
-            /** @type {(string | number | bigint)[]} */
-            let arr = [blockNumber, ...args.toArray()];
+        // Replace the uint8 _operation with the operation enumberated name for trove updates
+        if (arr[5]) {
+            tmORbo === 'tm' ?
+                arr[5] = TroveManagerOperationEnum[arr[5].toString()] : tmORbo === 'bo' ?
+                arr[5] = BorrowerOperationEnum[arr[5].toString()] : undefined;
+        }
 
-            // Replace the uint8 _operation with the operation enumberated name for trove updates
-            if (arr[5]) {
-                tmORbo === 'tm' ?
-                    arr[5] = TroveManagerOperationEnum[arr[5].toString()] : tmORbo === 'bo' ?
-                    arr[5] = BorrowerOperationEnum[arr[5].toString()] : undefined
-            }
+        return arr;
+    });
 
-            return arr;
-        });
+    return eventArgs;
+}
 
-        return eventArgs;
-    }
+/**
+ * @description This function is just to read the log file (if it exists) of the StabilityPoolLUSDBalanceUpdated events
+ * @param {string} protocol The protocol needed to navigate to the correct file
+ * @returns {Promise<(number | bigint)[][]>}
+ * @async
+ */
+async function updateDatabase(protocol) {
+    /** @type {(number | bigint)[][]} */
+    let syncedLogs = [];
+    
+    await fs.readFile(path.join('..', 'database', `${protocol}-logs`), 'utf8', (err, data) => {
+        if (err) syncedLogs = [];
+
+        syncedLogs = JSON.parse(data);
+    });
+
+    /** @type {(number | bigint)[][]} */ // @ts-ignore that getEventLogs sometimes returns string[][]
+    const unsyncedLogs = await getEventLogs(
+        contracts[protocol].SP,
+        protocol === 'LL' ? 'StabilityPoolUSDLBalanceUpdated' : 'StabilityPoolLUSDBalanceUpdated',
+        null, // @ts-ignore that totalDepositLogs[n][1] is a bigint
+        syncedLogs[syncedLogs.length - 1]?.[0] || LL_DEPLOY_BLOCK,
+        null
+    );
+
+    /** @type {(number | bigint)[][]} */
+    const combinedLogs = [...syncedLogs, ...unsyncedLogs];
+
+    fs.writeFileSync(path.join('..', 'database', `${protocol}-logs`), JSON.stringify(combinedLogs, null, 2), 'utf8');
+
+    return combinedLogs;
 }
 
 query('LL', '0x777bdf41A2E53b635843b92845A1f326647eBDE2')
 
-module.exports = query;
+module.exports = {
+    query,
+    updateDatabase
+};
