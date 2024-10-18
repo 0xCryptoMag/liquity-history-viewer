@@ -1,5 +1,5 @@
 /**
- * @file Handles the blockchain interactions
+ * @file Handles the blockchain interactions, querying event logs and formatting it for consumption
  */
 //@ts-check
 
