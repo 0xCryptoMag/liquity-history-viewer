@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Redemption & Liquidation Viewer</title>
+        <link rel="stylesheet" href="styles.css">
+        <script defer src="./main.js"></script>
+    </head>
+
+    <body>
+        <h1>Liquidation & Redemption Viewer</h1>
+
+        <br>
+
+        <div id="inputs">
+            <h2>Inputs</h2>
+    
+            <form id="arguments">
+                <h3>Which Protocol?</h2>
+    
+                <label for="protocols">Protocol</label>
+                <select name="protocols" id="protocols">
+                    <option value="LL">Liquid Loans</option>
+                    <option value="EP">Earn Protocol</option>
+                    <option value="FP">Flex Protocol</option>
+                </select>
+            
+    
+                <h3>Which Address?</h2>
+            
+                <label for="address">Address</label>
+                <input type="text" name="address" id="address">
+
+                <br><br>
+
+                <button type="button">Submit</button>
+            </form>
+        </div>
+
+        <br><br>
+
+        <div id="trove">
+            <h2>Trove Data</h2>
+    
+            <table name="trove-udpates" id="trove-updates">
+                <tr>
+                    <th>Date/Time</th>
+                    <th>Block</th>
+                    <th>Change in Collateral</th>
+                    <th>Change in Debt</th>
+                    <th>Reason for change</th>
+                    <th>Collateral Balance After</th>
+                    <th>Debt Balance After</th>
+                </tr>
+            </table>
+        </div>
+
+        <div id="stability-pool">
+            <h2>Stability Pool</h2>
+
+            <table name="stability-pool-updates" id="stability-pool-updates">
+                <tr>
+                    <th>Date/Time</th>
+                    <th>Block</th>
+                    <th>Stake Reductions from Liquidations</th>
+                    <th>Collateral Gain from Liquidations</th>
+                    <th>Stake Balance After</th>
+                </tr>
+            </table>
+        </div>
+    </body>
+</html>
