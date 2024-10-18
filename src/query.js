@@ -5,7 +5,7 @@
 
 const ethers = require('ethers');
 const abi = require('./abi.json'); // only includes VaultUpdated and TroveUpdated events
-const fs = require('fs');
+const fs = require('fs').promises;
 const path = require('path');
 
 // ---------- CONSTANTS ---------- //
@@ -146,6 +146,8 @@ async function query(protocol, address) {
         null
     );
 
+    console.log('Finished querying and compiling logs')
+
     return payload;
 }
 
@@ -192,13 +194,8 @@ async function getEventLogs(contract, eventName, eventIndexedArgs, startBlock, t
  */
 async function updateDatabase(protocol) {
     /** @type {(number | bigint)[][]} */
-    let syncedLogs = [];
-    
-    await fs.readFile(path.join('..', 'database', `${protocol}-logs`), 'utf8', (err, data) => {
-        if (err) syncedLogs = [];
-
-        syncedLogs = JSON.parse(data);
-    });
+    const syncedLogs = (await fs.readdir(path.resolve(__dirname, '..', 'database'), 'utf8')).includes(`${protocol}-sp-deposits-logs.json`) ?
+        JSON.parse( await fs.readFile(path.resolve(__dirname, '..', 'database', `${protocol}-sp-deposits-logs.json`), 'utf8')) : [];
 
     /** @type {(number | bigint)[][]} */ // @ts-ignore that getEventLogs sometimes returns string[][]
     const unsyncedLogs = await getEventLogs(
@@ -212,12 +209,16 @@ async function updateDatabase(protocol) {
     /** @type {(number | bigint)[][]} */
     const combinedLogs = [...syncedLogs, ...unsyncedLogs];
 
-    fs.writeFileSync(path.join('..', 'database', `${protocol}-logs`), JSON.stringify(combinedLogs, null, 2), 'utf8');
+    fs.writeFile(path.resolve(__dirname, '..', 'database', `${protocol}-sp-deposits-logs.json`), JSON.stringify(combinedLogs, (key, value) => {
+        if (typeof value === 'bigint') {
+            return value.toString()
+        } else {
+            return value;
+        }
+    }, 2), 'utf8');
 
     return combinedLogs;
 }
-
-query('LL', '0x777bdf41A2E53b635843b92845A1f326647eBDE2')
 
 module.exports = {
     query,
