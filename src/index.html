@@ -19,8 +19,8 @@
             <form id="arguments">
                 <h3>Which Protocol?</h2>
     
-                <label for="protocols">Protocol</label>
-                <select name="protocols" id="protocols">
+                <label for="protocol">Protocol</label>
+                <select name="protocol" id="protocol">
                     <option value="LL">Liquid Loans</option>
                     <option value="EP">Earn Protocol</option>
                     <option value="FP">Flex Protocol</option>
@@ -34,7 +34,7 @@
 
                 <br><br>
 
-                <button type="button">Submit</button>
+                <button id="submit" type="button">Submit</button>
             </form>
         </div>
 
@@ -43,15 +43,15 @@
         <div id="trove">
             <h2>Trove Data</h2>
     
-            <table name="trove-udpates" id="trove-updates">
+            <table class="table trove-updates" name="trove-udpates" id="trove-updates">
                 <tr>
                     <th>Date/Time</th>
                     <th>Block</th>
+                    <th>Collateral Balance After</th>
                     <th>Change in Collateral</th>
+                    <th>Debt Balance After</th>
                     <th>Change in Debt</th>
                     <th>Reason for change</th>
-                    <th>Collateral Balance After</th>
-                    <th>Debt Balance After</th>
                 </tr>
             </table>
         </div>
@@ -59,13 +59,16 @@
         <div id="stability-pool">
             <h2>Stability Pool</h2>
 
-            <table name="stability-pool-updates" id="stability-pool-updates">
+            <table class="table stability-pool-updates" name="stability-pool-updates" id="stability-pool-updates">
                 <tr>
                     <th>Date/Time</th>
                     <th>Block</th>
+                    <th>Stake Balance After</th>
                     <th>Stake Reductions from Liquidations</th>
                     <th>Collateral Gain from Liquidations</th>
-                    <th>Stake Balance After</th>
+                    <th>Stability Pool Ownership Ratio</th>
+                    <th>Last Block User Stake Balance Changed</th>
+                    <th>Last Block Total Stability Pool Changed</th>
                 </tr>
             </table>
         </div>
