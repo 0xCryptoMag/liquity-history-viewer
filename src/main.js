@@ -23,27 +23,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const updateText = document.getElementById('update-text');
 
     creatSubmitHandler(troveTableReset, stabilityPoolTableReset);
-    
-    fetch('https://api.github.com/repos/0xCryptoMag/liquity-history-viewer/releases/latest')
-        .then(response => response.json())
-        .then(latestVersion => {
-            latestVersion = latestVersion.tag_name.replace(/^v/, '');
-            const latestParts = latestVersion.split('.').map(Number);
-            const currentParts = currentVersion.split('.').map(Number);
-            let newerVersionAvailable = false;
-
-            for (let i = 0; i < latestParts.length; i++) {
-                if (latestParts[i] > (currentParts[i] || 0)) {
-                    newerVersionAvailable = true;
-                }
-            }
-
-            if (newerVersionAvailable) {
-                updateHeader.textContent = 'New Version Availabe';
-                updateText.textContent = 'Check https://github.com/0xCryptoMag/liquity-history-viewer for new version'
-            }
-        })
-        .catch(error => console.error('Failed to check for new app version', error));
 });
 
 /**
