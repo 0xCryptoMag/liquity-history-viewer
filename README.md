@@ -26,9 +26,8 @@ As mentioned in the LICENSE document, there are no warranties in the use of this
 
 ## No-Server Branch
 1. On the repository [page](https://github.com/0xCryptoMag/liquity-history-viewer), click the green code button and download and unzip the codebase. Or you can download the files using `git clone --branch no-server https://github.com/0xCryptoMag/liquity-history-viewer` in your terminal.
-2. Install depndencies app dependencies (ethersjs) by opening and navigating a terminal to the folder where the app resides in, then using the command `npm install`.
-3. Click on app.html to open the app interface on your browser.
-4. Pick your protocol to query and your address you want to query, then hit submit. Wait to get data from the blockchain and for the page to render your query results.
+2. Click on app.html to open the app interface on your browser.
+3. Pick your protocol to query and your address you want to query, then hit submit. Wait to get data from the blockchain and for the page to render your query results.
 
 ## Misc
 After displaying data from the blockchain, you can open your browsers console (usually with F12). The page should have logged the query data in it's entirety to the console. You can view that as desired to double check the results being displayed on the browser.

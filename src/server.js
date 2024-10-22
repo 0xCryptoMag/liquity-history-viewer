@@ -1,5 +1,5 @@
 /**
- * @file The entry point of the package, creates a simple server to handle requests
+ * @file A very light weight server to handle content delivery
  */
 
 const express = require('express');
