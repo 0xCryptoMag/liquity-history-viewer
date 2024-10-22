@@ -39,6 +39,7 @@ const server = (port) => {
             
             res.json(queryData);
         } catch (error) {
+            console.error(error);
             next(error);
         }
     });

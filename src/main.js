@@ -82,8 +82,8 @@ function displayTroveData(queryData, protocol) {
     const troveData = queryData.troveUpdates;
     
     troveData.forEach((log, ind, arr) => {
-        const collChangeAmount = log[4] - (arr?.[ind - 1]?.[4] || 0n);
-        const debtChangeAmount = log[3] - (arr?.[ind - 1]?.[3] || 0n);
+        const collChangeAmount = log[5] - (arr?.[ind - 1]?.[5] || 0n);
+        const debtChangeAmount = log[4] - (arr?.[ind - 1]?.[4] || 0n);
 
         
         const row = document.createElement('tr');
@@ -97,7 +97,7 @@ function displayTroveData(queryData, protocol) {
         row.appendChild(block);
 
         const collAfter = document.createElement('td');
-        collAfter.textContent = formatDecimals(log[4], decimals[protocol], false);
+        collAfter.textContent = formatDecimals(log[5], decimals[protocol], false);
         row.appendChild(collAfter);
 
         const collChange = document.createElement('td');
@@ -105,7 +105,7 @@ function displayTroveData(queryData, protocol) {
         row.appendChild(collChange);
 
         const debtAfter = document.createElement('td');
-        debtAfter.textContent = formatDecimals(log[3], decimals[protocol], false);
+        debtAfter.textContent = formatDecimals(log[4], decimals[protocol], false);
         row.appendChild(debtAfter);
 
         const debtChange = document.createElement('td');
@@ -113,7 +113,7 @@ function displayTroveData(queryData, protocol) {
         row.appendChild(debtChange);
 
         const operation = document.createElement('td');
-        operation.textContent = log[6];
+        operation.textContent = log[7];
         row.appendChild(operation);
 
         troveTable.appendChild(row);
@@ -132,22 +132,24 @@ function displayStabilityPoolData(queryData, protocol) {
     const userDepositUpdates = queryData.userDepositUpdates;
     const liquidations = queryData.liquidations;
 
+    console.log(queryData)
+
     liquidations.forEach((log) => {
         const userDepositsDuringLiquidationIndex = userDepositUpdates.findIndex(element => element[1] > log[1]) - 1;
-        const userDepositsDuringLiquidation = userDepositUpdates?.[userDepositsDuringLiquidationIndex]?.[3];
+        const userDepositsDuringLiquidation = userDepositUpdates?.[userDepositsDuringLiquidationIndex]?.[4];
         const userDepositDuringLiquidationBlock = userDepositUpdates?.[userDepositsDuringLiquidationIndex]?.[1]
         
         if (!userDepositsDuringLiquidation) return;
         
         const totalDepositsDuringLiquidationIndex = totalDeposits.findIndex(element => element[1] > log[1]) - 2;
-        const totalDepositsDuringLiquidation = totalDeposits?.[totalDepositsDuringLiquidationIndex]?.[2];
+        const totalDepositsDuringLiquidation = totalDeposits?.[totalDepositsDuringLiquidationIndex]?.[3];
         const totalDepositsDuringLiquidationBlock = totalDeposits?.[totalDepositsDuringLiquidationIndex]?.[1];
         
         // This ratio multiplied by 10 ^ decimals to keep precision, userDeposit / totalDeposits will always give 0n instead of ratio of stake pool ownership
         const poolOnwershipAmount = userDepositsDuringLiquidation * (10n ** BigInt(decimals[protocol])) / totalDepositsDuringLiquidation;
 
-        const stakeReductionAmount = log[2] * poolOnwershipAmount;
-        const collGainAmount = log[3] * poolOnwershipAmount;
+        const stakeReductionAmount = log[3] * poolOnwershipAmount;
+        const collGainAmount = log[4] * poolOnwershipAmount;
 
 
         const row = document.createElement('tr');
@@ -173,7 +175,7 @@ function displayStabilityPoolData(queryData, protocol) {
         row.appendChild(collGain);
         
         const poolOwnership = document.createElement('td');
-        poolOwnership.textContent = poolOnwershipAmount;
+        poolOwnership.textContent = formatDecimals(poolOnwershipAmount, decimals[protocol]);
         row.appendChild(poolOwnership);
 
         const lastBlockUserDeposit = document.createElement('td');

@@ -4,7 +4,7 @@
 //@ts-check
 
 const ethers = require('ethers');
-const abi = require('./abi.json'); // only includes VaultUpdated and TroveUpdated events
+const abi = require('./abi.json');
 const fs = require('fs').promises;
 const path = require('path');
 
@@ -155,11 +155,11 @@ async function query(protocol, address) {
      * @param {string} eventName The name of the event to filter for
      * @param {string?} eventIndexedArgs Address if needed to filter for the events
      * @param {number} startBlock The block at which to start the query, for total LUSD in stability pool the output is quite large if starting from beginning
-     * @param {string?} tmORbo Will determine whether to use the enum of the Trove Manager or the Borrower Operations
+     * @param {string?} contractAbbr Will determine whether to use the enum of the Trove Manager or the Borrower Operations
      * @returns {Promise<(string | number | bigint)[][]>}
      * @async
      */
-    async function getEventLogs(contract, eventName, eventIndexedArgs, startBlock, tmORbo) {
+    async function getEventLogs(contract, eventName, eventIndexedArgs, startBlock, contractAbbr) {
         /** @type {ethers.DeferredTopicFilter} */
         const filter = contract.filters[eventName](eventIndexedArgs);
     
@@ -168,17 +168,21 @@ async function query(protocol, address) {
         
         /** @type {(string | number | bigint)[][]} */
         const eventArgs = await Promise.all(
-            events.map(async ({ blockNumber, args }) => {
-                const datetime = await getDateFromBlock(blockNumber);
+            events.map(async ({ blockNumber, transactionIndex, args }) => {
+                /** @type {ethers.Block} */ // @ts-ignore block will never be null
+                const block = await provider.getBlock(blockNumber);
+                
+                /** @type {Date} */ // @ts-ignore will never be null
+                const datetime = block.date;
     
                 /** @type {(string | number | bigint)[]} */
-                let arr = [datetime, blockNumber, ...args.toArray()];
+                let arr = [datetime, blockNumber, transactionIndex, ...args.toArray()];
     
-                if (arr[6] != undefined) {
-                    tmORbo === 'tm'
-                        ? arr[6] = TroveManagerOperationEnum[Number(arr[6])]
-                        : tmORbo === 'bo'
-                        ? arr[6] = BorrowerOperationEnum[Number(arr[6])]
+                if (arr[7] != undefined) {
+                    contractAbbr === 'tm'
+                        ? arr[7] = TroveManagerOperationEnum[Number(arr[7])]
+                        : contractAbbr === 'bo'
+                        ? arr[7] = BorrowerOperationEnum[Number(arr[7])]
                         : undefined;
                 }
     
@@ -187,18 +191,6 @@ async function query(protocol, address) {
         );
     
         return eventArgs;
-    }
-    
-    /**
-     * @description Gets the UTC date of a block
-     * @param {number} blockNumber The block to get the date of
-     * @returns {Promise<string>}
-     * @async
-     */
-    async function getDateFromBlock(blockNumber) {
-        const block = await provider.getBlock(blockNumber); // @ts-ignore block will never be null
-        
-        return block.date;
     }
     
     /**
@@ -222,7 +214,7 @@ async function query(protocol, address) {
             });
         } catch {
             syncedLogs = [];
-        } finally {    
+        } finally {
             /** @type {(number | bigint)[][]} */ // @ts-ignore that getEventLogs sometimes returns string[][]
             const unsyncedLogs = await getEventLogs(
                 contracts[protocol].SP,
@@ -240,6 +232,6 @@ async function query(protocol, address) {
             return combinedLogs;
         }
     }
-} query('FP', '0x777bdf41A2E53b635843b92845A1f326647eBDE2')
+} 
 
 module.exports = query;
