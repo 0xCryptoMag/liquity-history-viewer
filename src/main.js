@@ -2,6 +2,8 @@
  * @file Handles the web page rendering
  */
 
+/** @type {string} */
+const currentVersion = '1.0.0';
 
 /** @type {Object<string, number>} */
 const decimals = {
@@ -17,7 +19,31 @@ document.addEventListener('DOMContentLoaded', () => {
     const troveTableReset = document.querySelector('.trove-updates').innerHTML;
     const stabilityPoolTableReset = document.querySelector('.stability-pool-updates').innerHTML;
 
+    const updateHeader = document.getElementById('update-header');
+    const updateText = document.getElementById('update-text');
+
     creatSubmitHandler(troveTableReset, stabilityPoolTableReset);
+    
+    fetch('https://api.github.com/repos/0xCryptoMag/liquity-history-viewer/releases/latest')
+        .then(response => response.json())
+        .then(latestVersion => {
+            latestVersion = latestVersion.tag_name.replace(/^v/, '');
+            const latestParts = latestVersion.split('.').map(Number);
+            const currentParts = currentVersion.split('.').map(Number);
+            let newerVersionAvailable = false;
+
+            for (let i = 0; i < latestParts.length; i++) {
+                if (latestParts[i] > (currentParts[i] || 0)) {
+                    newerVersionAvailable = true;
+                }
+            }
+
+            if (newerVersionAvailable) {
+                updateHeader.textContent = 'New Version Availabe';
+                updateText.textContent = 'Check https://github.com/0xCryptoMag/liquity-history-viewer for new version'
+            }
+        })
+        .catch(error => console.error('Failed to check for new app version', error));
 });
 
 /**
@@ -30,6 +56,9 @@ function creatSubmitHandler(troveTableReset, stabilityPoolTableReset) {
 
     button.addEventListener('click', async (event) => {
         event.preventDefault();
+
+        button.textContent = 'Loading...';
+        button.disabled = 'true';
 
         const troveTable = document.getElementById('trove-updates');
         const stabilityPoolTable = document.getElementById('stability-pool-updates');
@@ -47,6 +76,10 @@ function creatSubmitHandler(troveTableReset, stabilityPoolTableReset) {
 
         if (!/^0x[a-fA-F0-9]{40}$/.test(address)) {
             alert('Please enter a valid address');
+
+            button.textContent = 'Submit';
+            button.disabled = false;
+            
             return;
         }
 
@@ -62,6 +95,9 @@ function creatSubmitHandler(troveTableReset, stabilityPoolTableReset) {
             .then(queryData => {
                 displayTroveData(queryData, protocol);
                 displayStabilityPoolData(queryData, protocol);
+
+                button.textContent = 'Submit';
+                button.disabled = false;
             })
             .catch(error => console.error('Could not complete query', error));
     });
@@ -134,32 +170,39 @@ function displayStabilityPoolData(queryData, protocol) {
 
     console.log(queryData)
 
-    liquidations.forEach((log) => {
-        const userDepositsDuringLiquidationIndex = userDepositUpdates.findIndex(element => element[1] > log[1]) - 1;
+    liquidations.forEach((liq) => {
+        // User deposits
+        let userDepositsDuringLiquidationIndex = userDepositUpdates.findIndex(element => element[1] > liq[1]) - 1;
+
+        if (userDepositUpdates?.[userDepositsDuringLiquidationIndex]?.[1] === liq[1] && userDepositUpdates?.[userDepositsDuringLiquidationIndex]?.[2] > liq[2]) {
+            userDepositsDuringLiquidationIndex -= 1;
+        }
+
         const userDepositsDuringLiquidation = userDepositUpdates?.[userDepositsDuringLiquidationIndex]?.[4];
         const userDepositDuringLiquidationBlock = userDepositUpdates?.[userDepositsDuringLiquidationIndex]?.[1]
         
         if (!userDepositsDuringLiquidation) return;
         
-        const totalDepositsDuringLiquidationIndex = totalDeposits.findIndex(element => element[1] > log[1]) - 2;
+        // Total deposits
+        const totalDepositsDuringLiquidationIndex = totalDeposits.findIndex(element => element[1] === liq[1] && element[2] === liq[2]) - 1;
         const totalDepositsDuringLiquidation = totalDeposits?.[totalDepositsDuringLiquidationIndex]?.[3];
         const totalDepositsDuringLiquidationBlock = totalDeposits?.[totalDepositsDuringLiquidationIndex]?.[1];
         
         // This ratio multiplied by 10 ^ decimals to keep precision, userDeposit / totalDeposits will always give 0n instead of ratio of stake pool ownership
         const poolOnwershipAmount = userDepositsDuringLiquidation * (10n ** BigInt(decimals[protocol])) / totalDepositsDuringLiquidation;
 
-        const stakeReductionAmount = log[3] * poolOnwershipAmount;
-        const collGainAmount = log[4] * poolOnwershipAmount;
+        const stakeReductionAmount = liq[3] * poolOnwershipAmount;
+        const collGainAmount = liq[4] * poolOnwershipAmount;
 
 
         const row = document.createElement('tr');
 
         const datetime = document.createElement('td');
-        datetime.textContent = log[0].toLocaleString('en-US', { timeZone: 'UTC', timeZoneName: 'short' });
+        datetime.textContent = liq[0].toLocaleString('en-US', { timeZone: 'UTC', timeZoneName: 'short' });
         row.appendChild(datetime);
 
         const block = document.createElement('td');
-        block.textContent = log[1];
+        block.textContent = liq[1];
         row.appendChild(block);
 
         const stakeBalanceAfter = document.createElement('td');
