@@ -224,6 +224,25 @@
                     ],
                     "name": "Liquidation",
                     "type": "event"
+                },
+                {
+                    "anonymous": false,
+                    "inputs": [
+                    {
+                        "indexed": true,
+                        "internalType": "address",
+                        "name": "_account",
+                        "type": "address"
+                    },
+                    {
+                        "indexed": false,
+                        "internalType": "uint256",
+                        "name": "_newBalance",
+                        "type": "uint256"
+                    }
+                    ],
+                    "name": "CollBalanceUpdated",
+                    "type": "event"
                 }
             ]
 
@@ -261,6 +280,14 @@
             /** @type {string} */
             const FP_STABILITY_POOL = '0x271f576fd6de465231320a0f9997acb0c8b97e07';
 
+            // These are the CollSurplusPool contracts for the different protocols
+            /** @type {string} */
+            const LL_COLL_SURPLUS_POOL = '0x88742a6Fd16A00Fc671fff371E4CC8ff58378596';
+            /** @type {string} */
+            const EP_COLL_SURPLUS_POOL = '0x4eFE70632a7245e165164A0207A0e31A2B8cd63a';
+            /** @type {string} */
+            const FP_COLL_SURPLUS_POOL = '0xCDeC6212560c03e62D7e2A74de22AF70deA9a288';
+
             /** @type {number} */
             const LL_DEPLOY_BLOCK = 18971002;
 
@@ -270,9 +297,6 @@
                 EP: 18,
                 FP: 8
             }
-
-            /** @type {string} */
-            const currentVersion = '1.0.0';
 
 
             // ---------- ETHERS INSTANTIATIONS ---------- //
@@ -284,21 +308,24 @@
 
 
             /** @type {Object<string, Object<string, ethers.Contract>>} */
-            const contracts = {
+                const contracts = {
                 LL: {
                     TM: new ethers.Contract(LL_TROVE_MANAGER, abi, provider),
                     BO: new ethers.Contract(LL_BORROWER_OPERATIONS, abi, provider),
-                    SP: new ethers.Contract(LL_STABILITY_POOL, abi, provider)
+                    SP: new ethers.Contract(LL_STABILITY_POOL, abi, provider),
+                    CSP: new ethers.Contract(LL_COLL_SURPLUS_POOL, abi, provider)
                 },
                 EP: {
                     TM: new ethers.Contract(EP_TROVE_MANAGER, abi, provider),
                     BO: new ethers.Contract(EP_BORROWER_OPERATIONS, abi, provider),
-                    SP: new ethers.Contract(EP_STABILITY_POOL, abi, provider)
+                    SP: new ethers.Contract(EP_STABILITY_POOL, abi, provider),
+                    CSP: new ethers.Contract(EP_COLL_SURPLUS_POOL, abi, provider)
                 },
                 FP: {
                     TM: new ethers.Contract(FP_TROVE_MANAGER, abi, provider),
                     BO: new ethers.Contract(FP_BORROWER_OPERATIONS, abi, provider),
-                    SP: new ethers.Contract(FP_STABILITY_POOL, abi, provider)
+                    SP: new ethers.Contract(FP_STABILITY_POOL, abi, provider),
+                    CSP: new ethers.Contract(FP_COLL_SURPLUS_POOL, abi, provider)
                 }
             }
 
@@ -385,54 +412,61 @@
              * @param {string} address The user supplied address
              * @returns {Promise<Object<string, (string | number | bigint)[][]>>}
              */
-            async function query(protocol, address) {
-                /** @type {Object<string, (string | number | bigint)[][]>} */
-                let payload = {};
+             async function query(protocol, address) {
+            /** @type {Object<string, (string | number | bigint)[][]>} */
+            let payload = {};
 
-                // Get trove updates performed by the Trove Manager and Borrower Operations contracts, then sort them by blocknumber
-                payload.troveManager = await getEventLogs(
-                    contracts[protocol].TM,
-                    protocol === 'LL' ? 'VaultUpdated' : 'TroveUpdated',
-                    address,
-                    LL_DEPLOY_BLOCK,
-                    'tm'
-                );
-                payload.borrowerOperations = await getEventLogs(
-                    contracts[protocol].BO,
-                    protocol === 'LL' ? 'VaultUpdated' : 'TroveUpdated',
-                    address,
-                    LL_DEPLOY_BLOCK,
-                    'bo'
-                ); // @ts-ignore that other values of a[n] and b[n] can be string
-                payload.troveUpdates = [...payload.troveManager, ...payload.borrowerOperations].sort((a, b) => a[1] - b[1]);
+            // Get trove updates performed by the Trove Manager and Borrower Operations contracts, then sort them by blocknumber
+            payload.troveManager = await getEventLogs(
+                contracts[protocol].TM,
+                protocol === 'LL' ? 'VaultUpdated' : 'TroveUpdated',
+                address,
+                LL_DEPLOY_BLOCK,
+                'tm'
+            );
+            payload.borrowerOperations = await getEventLogs(
+                contracts[protocol].BO,
+                protocol === 'LL' ? 'VaultUpdated' : 'TroveUpdated',
+                address,
+                LL_DEPLOY_BLOCK,
+                'bo'
+            ); 
+            payload.collateralSurplus = await getEventLogs(
+                contracts[protocol].CSP,
+                'CollBalanceUpdated',
+                address,
+                LL_DEPLOY_BLOCK,
+                null
+            ); // @ts-ignore that other values of a[n] and b[n] can be string
+            payload.troveUpdates = [...payload.troveManager, ...payload.borrowerOperations].sort((a, b) => a[1] - b[1]);
 
 
-                // Get stability pool stake updates, gets total deposits (needed to find the percentage of the pool owned by user), user balances, and all liquidation events
-                // The data returned for all StabilityPoolLUSDBalanceUpdated events is a large file and can take 5-10 mins pull, at time of writing this there were 120k events
-                // This branch will make the full query everytime, but will not require the use of node modules
-                payload.totalDeposit = await getEventLogs(
-                    contracts[protocol].SP,
-                    protocol === 'LL' ? 'StabilityPoolUSDLBalanceUpdated' : 'StabilityPoolLUSDBalanceUpdated',
-                    null,
-                    LL_DEPLOY_BLOCK,
-                    null
-                );
-                payload.userDepositUpdates = await getEventLogs(
-                    contracts[protocol].SP,
-                    'UserDepositChanged',
-                    address,
-                    LL_DEPLOY_BLOCK,
-                    null
-                );
-                payload.liquidations = await getEventLogs(
-                    contracts[protocol].TM,
-                    'Liquidation',
-                    null,
-                    LL_DEPLOY_BLOCK,
-                    null
-                );
+            // Get stability pool stake updates, gets total deposits (needed to find the percentage of the pool owned by user), user balances, and all liquidation events
+            // The data returned for all StabilityPoolLUSDBalanceUpdated events is a large file and can take 5-10 mins pull, at time of writing this there were 120k events
+            // This branch will make the full query everytime, but will not require the use of node modules
+            payload.totalDeposit = await getEventLogs(
+                contracts[protocol].SP,
+                protocol === 'LL' ? 'StabilityPoolUSDLBalanceUpdated' : 'StabilityPoolLUSDBalanceUpdated',
+                null,
+                LL_DEPLOY_BLOCK,
+                null
+            );
+            payload.userDepositUpdates = await getEventLogs(
+                contracts[protocol].SP,
+                'UserDepositChanged',
+                address,
+                LL_DEPLOY_BLOCK,
+                null
+            );
+            payload.liquidations = await getEventLogs(
+                contracts[protocol].TM,
+                'Liquidation',
+                null,
+                LL_DEPLOY_BLOCK,
+                null
+            );
 
-                return payload;
+            return payload;
 
 
                 /**
@@ -493,9 +527,18 @@
                 const troveTable = document.getElementById('trove-updates');
 
                 const troveData = queryData.troveUpdates;
+                const collateralSurplus = queryData.collateralSurplus;
                 
                 troveData.forEach((log, ind, arr) => {
-                    const collChangeAmount = log[5] - (arr?.[ind - 1]?.[5] || 0n);
+                    let collChangeAmount = log[5] - (arr?.[ind - 1]?.[5] || 0n);
+
+                    if (log[7] === 'redeemCollateral' && log[5] === 0n) {
+                        /** @type {number} */
+                        const collateralSurplusIndex = collateralSurplus.findIndex(element => log[1] === element[1]);
+
+                        collChangeAmount += collateralSurplus[collateralSurplusIndex][4];
+                    }
+
                     const debtChangeAmount = log[4] - (arr?.[ind - 1]?.[4] || 0n);
 
                     
