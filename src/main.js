@@ -19,9 +19,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const troveTableReset = document.querySelector('.trove-updates').innerHTML;
     const stabilityPoolTableReset = document.querySelector('.stability-pool-updates').innerHTML;
 
-    const updateHeader = document.getElementById('update-header');
-    const updateText = document.getElementById('update-text');
-
     creatSubmitHandler(troveTableReset, stabilityPoolTableReset);
 });
 
@@ -72,6 +69,8 @@ function creatSubmitHandler(troveTableReset, stabilityPoolTableReset) {
                 }
             }))
             .then(queryData => {
+                console.log(queryData);
+
                 displayTroveData(queryData, protocol);
                 displayStabilityPoolData(queryData, protocol);
 
@@ -95,9 +94,18 @@ function displayTroveData(queryData, protocol) {
     const troveTable = document.getElementById('trove-updates');
 
     const troveData = queryData.troveUpdates;
+    const collateralSurplus = queryData.collateralSurplus;
     
     troveData.forEach((log, ind, arr) => {
-        const collChangeAmount = log[5] - (arr?.[ind - 1]?.[5] || 0n);
+        let collChangeAmount = log[5] - (arr?.[ind - 1]?.[5] || 0n);
+
+        if (log[7] === 'redeemCollateral' && log[5] === 0n) {
+            /** @type {number} */
+            const collateralSurplusIndex = collateralSurplus.findIndex(element => log[1] === element[1]);
+
+            collChangeAmount += collateralSurplus[collateralSurplusIndex][4];
+        }
+
         const debtChangeAmount = log[4] - (arr?.[ind - 1]?.[4] || 0n);
 
         
@@ -146,8 +154,6 @@ function displayStabilityPoolData(queryData, protocol) {
     const totalDeposits = queryData.totalDeposit;
     const userDepositUpdates = queryData.userDepositUpdates;
     const liquidations = queryData.liquidations;
-
-    console.log(queryData)
 
     liquidations.forEach((liq) => {
         // User deposits

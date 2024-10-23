@@ -47,6 +47,14 @@ const EP_STABILITY_POOL = '0x02e842db8d6c78d17cf8146009fb864094d95319';
 /** @type {string} */
 const FP_STABILITY_POOL = '0x271f576fd6de465231320a0f9997acb0c8b97e07';
 
+// These are the CollSurplusPool contracts for the different protocols
+/** @type {string} */
+const LL_COLL_SURPLUS_POOL = '0x88742a6Fd16A00Fc671fff371E4CC8ff58378596';
+/** @type {string} */
+const EP_COLL_SURPLUS_POOL = '0x4eFE70632a7245e165164A0207A0e31A2B8cd63a';
+/** @type {string} */
+const FP_COLL_SURPLUS_POOL = '0xCDeC6212560c03e62D7e2A74de22AF70deA9a288';
+
 /** @type {number} */
 const LL_DEPLOY_BLOCK = 18971002;
 
@@ -65,17 +73,20 @@ const contracts = {
     LL: {
         TM: new ethers.Contract(LL_TROVE_MANAGER, abi, provider),
         BO: new ethers.Contract(LL_BORROWER_OPERATIONS, abi, provider),
-        SP: new ethers.Contract(LL_STABILITY_POOL, abi, provider)
+        SP: new ethers.Contract(LL_STABILITY_POOL, abi, provider),
+        CSP: new ethers.Contract(LL_COLL_SURPLUS_POOL, abi, provider)
     },
     EP: {
         TM: new ethers.Contract(EP_TROVE_MANAGER, abi, provider),
         BO: new ethers.Contract(EP_BORROWER_OPERATIONS, abi, provider),
-        SP: new ethers.Contract(EP_STABILITY_POOL, abi, provider)
+        SP: new ethers.Contract(EP_STABILITY_POOL, abi, provider),
+        CSP: new ethers.Contract(EP_COLL_SURPLUS_POOL, abi, provider)
     },
     FP: {
         TM: new ethers.Contract(FP_TROVE_MANAGER, abi, provider),
         BO: new ethers.Contract(FP_BORROWER_OPERATIONS, abi, provider),
-        SP: new ethers.Contract(FP_STABILITY_POOL, abi, provider)
+        SP: new ethers.Contract(FP_STABILITY_POOL, abi, provider),
+        CSP: new ethers.Contract(FP_COLL_SURPLUS_POOL, abi, provider)
     }
 }
 
@@ -123,6 +134,13 @@ async function query(protocol, address) {
         address,
         LL_DEPLOY_BLOCK,
         'bo'
+    ); 
+    payload.collateralSurplus = await getEventLogs(
+        contracts[protocol].CSP,
+        'CollBalanceUpdated',
+        address,
+        LL_DEPLOY_BLOCK,
+        null
     ); // @ts-ignore that other values of a[n] and b[n] can be string
     payload.troveUpdates = [...payload.troveManager, ...payload.borrowerOperations].sort((a, b) => a[1] - b[1]);
 
@@ -185,7 +203,7 @@ async function query(protocol, address) {
                         ? arr[7] = BorrowerOperationEnum[Number(arr[7])]
                         : undefined;
                 }
-    
+
                 return arr;
             })
         );
@@ -205,7 +223,7 @@ async function query(protocol, address) {
     
         try {
             syncedLogs = JSON.parse(await fs.readFile(path.resolve(__dirname, '..', 'database', `${protocol}-sp-deposits-logs.json`), 'utf8'), (key, value) => {
-                // Tests if value being parsed is a string and if the string contains only numbers ending in 'n'
+                // Tests if value being is an object with $bigint property, if so return just the value of the bigint
                 if (Object.hasOwn(value, '$bigint')) {
                     return BigInt(value['$bigint']);
                 } else {
