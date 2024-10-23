@@ -52,9 +52,11 @@ const openBrowser = (url) => {
         case 'win32':
             exec(`start ${url}`, handleError);
 
+            break;
         case 'darwin':
             exec(`open ${url}`, handleError);
 
+            break;
         case 'linux':
             exec('command -v xdg-open', (xdgError) => {
                 if (!xdgError) {
@@ -69,9 +71,11 @@ const openBrowser = (url) => {
                     })
                 }
             });
+            
+            break;
     }
 
-    const handleError = (error) => {
+    function handleError(error) {
         if (error) {
             console.log(`Failed to automatically open web browser\n Open a browser and go to ${url}`);
         }
