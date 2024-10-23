@@ -413,60 +413,60 @@
              * @returns {Promise<Object<string, (string | number | bigint)[][]>>}
              */
              async function query(protocol, address) {
-            /** @type {Object<string, (string | number | bigint)[][]>} */
-            let payload = {};
+                /** @type {Object<string, (string | number | bigint)[][]>} */
+                let payload = {};
 
-            // Get trove updates performed by the Trove Manager and Borrower Operations contracts, then sort them by blocknumber
-            payload.troveManager = await getEventLogs(
-                contracts[protocol].TM,
-                protocol === 'LL' ? 'VaultUpdated' : 'TroveUpdated',
-                address,
-                LL_DEPLOY_BLOCK,
-                'tm'
-            );
-            payload.borrowerOperations = await getEventLogs(
-                contracts[protocol].BO,
-                protocol === 'LL' ? 'VaultUpdated' : 'TroveUpdated',
-                address,
-                LL_DEPLOY_BLOCK,
-                'bo'
-            ); 
-            payload.collateralSurplus = await getEventLogs(
-                contracts[protocol].CSP,
-                'CollBalanceUpdated',
-                address,
-                LL_DEPLOY_BLOCK,
-                null
-            ); // @ts-ignore that other values of a[n] and b[n] can be string
-            payload.troveUpdates = [...payload.troveManager, ...payload.borrowerOperations].sort((a, b) => a[1] - b[1]);
+                // Get trove updates performed by the Trove Manager and Borrower Operations contracts, then sort them by blocknumber
+                payload.troveManager = await getEventLogs(
+                    contracts[protocol].TM,
+                    protocol === 'LL' ? 'VaultUpdated' : 'TroveUpdated',
+                    address,
+                    LL_DEPLOY_BLOCK,
+                    'tm'
+                );
+                payload.borrowerOperations = await getEventLogs(
+                    contracts[protocol].BO,
+                    protocol === 'LL' ? 'VaultUpdated' : 'TroveUpdated',
+                    address,
+                    LL_DEPLOY_BLOCK,
+                    'bo'
+                ); 
+                payload.collateralSurplus = await getEventLogs(
+                    contracts[protocol].CSP,
+                    'CollBalanceUpdated',
+                    address,
+                    LL_DEPLOY_BLOCK,
+                    null
+                ); // @ts-ignore that other values of a[n] and b[n] can be string
+                payload.troveUpdates = [...payload.troveManager, ...payload.borrowerOperations].sort((a, b) => a[1] - b[1]);
 
 
-            // Get stability pool stake updates, gets total deposits (needed to find the percentage of the pool owned by user), user balances, and all liquidation events
-            // The data returned for all StabilityPoolLUSDBalanceUpdated events is a large file and can take 5-10 mins pull, at time of writing this there were 120k events
-            // This branch will make the full query everytime, but will not require the use of node modules
-            payload.totalDeposit = await getEventLogs(
-                contracts[protocol].SP,
-                protocol === 'LL' ? 'StabilityPoolUSDLBalanceUpdated' : 'StabilityPoolLUSDBalanceUpdated',
-                null,
-                LL_DEPLOY_BLOCK,
-                null
-            );
-            payload.userDepositUpdates = await getEventLogs(
-                contracts[protocol].SP,
-                'UserDepositChanged',
-                address,
-                LL_DEPLOY_BLOCK,
-                null
-            );
-            payload.liquidations = await getEventLogs(
-                contracts[protocol].TM,
-                'Liquidation',
-                null,
-                LL_DEPLOY_BLOCK,
-                null
-            );
+                // Get stability pool stake updates, gets total deposits (needed to find the percentage of the pool owned by user), user balances, and all liquidation events
+                // The data returned for all StabilityPoolLUSDBalanceUpdated events is a large file and can take 5-10 mins pull, at time of writing this there were 120k events
+                // This branch will make the full query everytime, but will not require the use of node modules
+                payload.totalDeposit = await getEventLogs(
+                    contracts[protocol].SP,
+                    protocol === 'LL' ? 'StabilityPoolUSDLBalanceUpdated' : 'StabilityPoolLUSDBalanceUpdated',
+                    null,
+                    LL_DEPLOY_BLOCK,
+                    null
+                );
+                payload.userDepositUpdates = await getEventLogs(
+                    contracts[protocol].SP,
+                    'UserDepositChanged',
+                    address,
+                    LL_DEPLOY_BLOCK,
+                    null
+                );
+                payload.liquidations = await getEventLogs(
+                    contracts[protocol].TM,
+                    'Liquidation',
+                    null,
+                    LL_DEPLOY_BLOCK,
+                    null
+                );
 
-            return payload;
+                return payload;
 
 
                 /**
