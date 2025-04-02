@@ -1,17 +1,30 @@
 {
-  "name": "liquity-history-viewer",
-  "version": "1.0.1",
-  "description": "retrieves redemption and liquidation events from liquity forks involving given addresses",
-  "main": "index.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
-  "author": "0xCryptoMag",
-  "license": "ISC",
-  "dependencies": {
-    "body-parser": "^1.20.3",
-    "cors": "^2.8.5",
-    "ethers": "^6.13.4",
-    "express": "^4.21.1"
-  }
+	"name": "liquity-history-viewer",
+	"version": "1.0.0",
+	"description": "takes an address for a user of liquity (or fork) and gives state changes from liquidations and redemptions that are not normally tracked",
+	"main": "index.js",
+	"type": "module",
+	"scripts": {
+		"test": "echo \"Error: no test specified\" && exit 1"
+	},
+	"author": "0xCryptoMag",
+	"license": "ISC",
+	"dependencies": {
+		"@liquity/lib-ethers": "^3.4.0",
+		"@openzeppelin/contracts": "^5.2.0",
+		"body-parser": "^1.20.3",
+		"cors": "^2.8.5",
+		"express": "^4.21.1"
+	},
+	"devDependencies": {
+		"@typechain/ethers-v6": "^0.5.1",
+		"@types/node": "^22.13.13",
+		"typescript": "^5.8.2",
+		"typechain": "^8.3.2"
+	},
+	"overrides": {
+		"@liquity/lib-ethers": {
+			"ethers": "6.13.5"
+		}
+	}
 }
