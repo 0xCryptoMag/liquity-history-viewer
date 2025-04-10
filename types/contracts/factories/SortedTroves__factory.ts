@@ -1,0 +1,514 @@
+import { Contract, Interface, InterfaceAbi, type ContractRunner } from 'ethers';
+import type { SortedTroves, SortedTrovesInterface } from '../SortedTroves.js';
+import { modifyAbi, type Modifiers } from '../common.js';
+
+const _abi = [
+	{
+		anonymous: false,
+		inputs: [
+			{
+				indexed: false,
+				internalType: 'address',
+				name: '_borrowerOperationsAddress',
+				type: 'address'
+			}
+		],
+		name: 'BorrowerOperationsAddressChanged',
+		type: 'event'
+	},
+	{
+		anonymous: false,
+		inputs: [
+			{
+				indexed: false,
+				internalType: 'address',
+				name: '_id',
+				type: 'address'
+			},
+			{
+				indexed: false,
+				internalType: 'uint256',
+				name: '_NICR',
+				type: 'uint256'
+			}
+		],
+		name: 'NodeAdded',
+		type: 'event'
+	},
+	{
+		anonymous: false,
+		inputs: [
+			{
+				indexed: false,
+				internalType: 'address',
+				name: '_id',
+				type: 'address'
+			}
+		],
+		name: 'NodeRemoved',
+		type: 'event'
+	},
+	{
+		anonymous: false,
+		inputs: [
+			{
+				indexed: true,
+				internalType: 'address',
+				name: 'previousOwner',
+				type: 'address'
+			},
+			{
+				indexed: true,
+				internalType: 'address',
+				name: 'newOwner',
+				type: 'address'
+			}
+		],
+		name: 'OwnershipTransferred',
+		type: 'event'
+	},
+	{
+		anonymous: false,
+		inputs: [
+			{
+				indexed: false,
+				internalType: 'address',
+				name: '_sortedDoublyLLAddress',
+				type: 'address'
+			}
+		],
+		name: 'SortedTrovesAddressChanged',
+		type: 'event'
+	},
+	{
+		anonymous: false,
+		inputs: [
+			{
+				indexed: false,
+				internalType: 'address',
+				name: '_troveManagerAddress',
+				type: 'address'
+			}
+		],
+		name: 'TroveManagerAddressChanged',
+		type: 'event'
+	},
+	{
+		inputs: [],
+		name: 'NAME',
+		outputs: [
+			{
+				internalType: 'string',
+				name: '',
+				type: 'string'
+			}
+		],
+		stateMutability: 'view',
+		type: 'function'
+	},
+	{
+		inputs: [],
+		name: 'borrowerOperationsAddress',
+		outputs: [
+			{
+				internalType: 'address',
+				name: '',
+				type: 'address'
+			}
+		],
+		stateMutability: 'view',
+		type: 'function'
+	},
+	{
+		inputs: [
+			{
+				internalType: 'address',
+				name: '_id',
+				type: 'address'
+			}
+		],
+		name: 'contains',
+		outputs: [
+			{
+				internalType: 'bool',
+				name: '',
+				type: 'bool'
+			}
+		],
+		stateMutability: 'view',
+		type: 'function'
+	},
+	{
+		inputs: [],
+		name: 'data',
+		outputs: [
+			{
+				internalType: 'address',
+				name: 'head',
+				type: 'address'
+			},
+			{
+				internalType: 'address',
+				name: 'tail',
+				type: 'address'
+			},
+			{
+				internalType: 'uint256',
+				name: 'maxSize',
+				type: 'uint256'
+			},
+			{
+				internalType: 'uint256',
+				name: 'size',
+				type: 'uint256'
+			}
+		],
+		stateMutability: 'view',
+		type: 'function'
+	},
+	{
+		inputs: [
+			{
+				internalType: 'uint256',
+				name: '_NICR',
+				type: 'uint256'
+			},
+			{
+				internalType: 'address',
+				name: '_prevId',
+				type: 'address'
+			},
+			{
+				internalType: 'address',
+				name: '_nextId',
+				type: 'address'
+			}
+		],
+		name: 'findInsertPosition',
+		outputs: [
+			{
+				internalType: 'address',
+				name: '',
+				type: 'address'
+			},
+			{
+				internalType: 'address',
+				name: '',
+				type: 'address'
+			}
+		],
+		stateMutability: 'view',
+		type: 'function'
+	},
+	{
+		inputs: [],
+		name: 'getFirst',
+		outputs: [
+			{
+				internalType: 'address',
+				name: '',
+				type: 'address'
+			}
+		],
+		stateMutability: 'view',
+		type: 'function'
+	},
+	{
+		inputs: [],
+		name: 'getLast',
+		outputs: [
+			{
+				internalType: 'address',
+				name: '',
+				type: 'address'
+			}
+		],
+		stateMutability: 'view',
+		type: 'function'
+	},
+	{
+		inputs: [],
+		name: 'getMaxSize',
+		outputs: [
+			{
+				internalType: 'uint256',
+				name: '',
+				type: 'uint256'
+			}
+		],
+		stateMutability: 'view',
+		type: 'function'
+	},
+	{
+		inputs: [
+			{
+				internalType: 'address',
+				name: '_id',
+				type: 'address'
+			}
+		],
+		name: 'getNext',
+		outputs: [
+			{
+				internalType: 'address',
+				name: '',
+				type: 'address'
+			}
+		],
+		stateMutability: 'view',
+		type: 'function'
+	},
+	{
+		inputs: [
+			{
+				internalType: 'address',
+				name: '_id',
+				type: 'address'
+			}
+		],
+		name: 'getPrev',
+		outputs: [
+			{
+				internalType: 'address',
+				name: '',
+				type: 'address'
+			}
+		],
+		stateMutability: 'view',
+		type: 'function'
+	},
+	{
+		inputs: [],
+		name: 'getSize',
+		outputs: [
+			{
+				internalType: 'uint256',
+				name: '',
+				type: 'uint256'
+			}
+		],
+		stateMutability: 'view',
+		type: 'function'
+	},
+	{
+		inputs: [
+			{
+				internalType: 'address',
+				name: '_id',
+				type: 'address'
+			},
+			{
+				internalType: 'uint256',
+				name: '_NICR',
+				type: 'uint256'
+			},
+			{
+				internalType: 'address',
+				name: '_prevId',
+				type: 'address'
+			},
+			{
+				internalType: 'address',
+				name: '_nextId',
+				type: 'address'
+			}
+		],
+		name: 'insert',
+		outputs: [],
+		stateMutability: 'nonpayable',
+		type: 'function'
+	},
+	{
+		inputs: [],
+		name: 'isEmpty',
+		outputs: [
+			{
+				internalType: 'bool',
+				name: '',
+				type: 'bool'
+			}
+		],
+		stateMutability: 'view',
+		type: 'function'
+	},
+	{
+		inputs: [],
+		name: 'isFull',
+		outputs: [
+			{
+				internalType: 'bool',
+				name: '',
+				type: 'bool'
+			}
+		],
+		stateMutability: 'view',
+		type: 'function'
+	},
+	{
+		inputs: [],
+		name: 'isOwner',
+		outputs: [
+			{
+				internalType: 'bool',
+				name: '',
+				type: 'bool'
+			}
+		],
+		stateMutability: 'view',
+		type: 'function'
+	},
+	{
+		inputs: [],
+		name: 'owner',
+		outputs: [
+			{
+				internalType: 'address',
+				name: '',
+				type: 'address'
+			}
+		],
+		stateMutability: 'view',
+		type: 'function'
+	},
+	{
+		inputs: [
+			{
+				internalType: 'address',
+				name: '_id',
+				type: 'address'
+			},
+			{
+				internalType: 'uint256',
+				name: '_newNICR',
+				type: 'uint256'
+			},
+			{
+				internalType: 'address',
+				name: '_prevId',
+				type: 'address'
+			},
+			{
+				internalType: 'address',
+				name: '_nextId',
+				type: 'address'
+			}
+		],
+		name: 'reInsert',
+		outputs: [],
+		stateMutability: 'nonpayable',
+		type: 'function'
+	},
+	{
+		inputs: [
+			{
+				internalType: 'address',
+				name: '_id',
+				type: 'address'
+			}
+		],
+		name: 'remove',
+		outputs: [],
+		stateMutability: 'nonpayable',
+		type: 'function'
+	},
+	{
+		inputs: [
+			{
+				internalType: 'uint256',
+				name: '_size',
+				type: 'uint256'
+			},
+			{
+				internalType: 'address',
+				name: '_troveManagerAddress',
+				type: 'address'
+			},
+			{
+				internalType: 'address',
+				name: '_borrowerOperationsAddress',
+				type: 'address'
+			}
+		],
+		name: 'setParams',
+		outputs: [],
+		stateMutability: 'nonpayable',
+		type: 'function'
+	},
+	{
+		inputs: [],
+		name: 'troveManager',
+		outputs: [
+			{
+				internalType: 'contract ITroveManager',
+				name: '',
+				type: 'address'
+			}
+		],
+		stateMutability: 'view',
+		type: 'function'
+	},
+	{
+		inputs: [
+			{
+				internalType: 'uint256',
+				name: '_NICR',
+				type: 'uint256'
+			},
+			{
+				internalType: 'address',
+				name: '_prevId',
+				type: 'address'
+			},
+			{
+				internalType: 'address',
+				name: '_nextId',
+				type: 'address'
+			}
+		],
+		name: 'validInsertPosition',
+		outputs: [
+			{
+				internalType: 'bool',
+				name: '',
+				type: 'bool'
+			}
+		],
+		stateMutability: 'view',
+		type: 'function'
+	}
+] as const;
+
+export class SortedTroves__factory {
+	static readonly abi = _abi;
+	static modifiedAbi(modifiers: Modifiers): InterfaceAbi {
+		return modifyAbi(structuredClone(_abi), modifiers);
+	}
+
+	static createInterface<M extends Modifiers>(
+		modifiers: M
+	): SortedTrovesInterface<M> {
+		if (modifiers.abisType === 'normal') return new Interface(_abi) as SortedTrovesInterface<M>;
+
+		return new Interface(
+			modifyAbi(structuredClone(_abi), modifiers)
+		) as SortedTrovesInterface<M>;
+	}
+	static connect<M extends Modifiers>(
+		address: string,
+		modifiers: M,
+		runner?: ContractRunner | null
+	): SortedTroves<M> {
+		if (modifiers.abisType === 'normal')
+			return new Contract(
+				address,
+				_abi,
+				runner
+			) as unknown as SortedTroves<M>;
+
+		return new Contract(
+			address,
+			modifyAbi(structuredClone(_abi), modifiers),
+			runner
+		) as unknown as SortedTroves<M>
+	}
+}

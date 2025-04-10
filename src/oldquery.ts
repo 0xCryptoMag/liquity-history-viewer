@@ -13,7 +13,7 @@ import fs from 'fs/promises';
 import path from 'path';
 
 import configJson from './config.json' with { type: 'json' };
-import { Address, Config } from './types.js';
+import { Address, Config } from '../types/types.js';
 
 const config = configJson as Config;
 

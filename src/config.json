@@ -18,7 +18,9 @@
 				"LQTYToken": "0x6DEA81C8171D0bA574754EF6F8b412F2Ed88c54D",
 				"Collateral": "",
 				"deployBlock": 12178557,
-				"abisType": "normal"
+				"modifiers": {
+					"abisType": "normal"
+				}
 			}
 		}
 	},
@@ -41,8 +43,8 @@
 				"LQTYToken": "0x9159f1D2a9f51998Fc9Ab03fbd8f265ab14A1b3B",
 				"Collateral": "",
 				"deployBlock": 18971002,
-				"abisType": "modified",
 				"modifiers": {
+					"abisType": "modified",
 					"eth": "pls",
 					"ether": "pulse",
 					"lqty": "loan",
@@ -65,7 +67,9 @@
 				"LQTYToken": "0xb513038bbfdf9d40b676f41606f4f61d4b02c4a2",
 				"Collateral": "0x95b303987a60c71504d99aa1b13b4da07b0790ab",
 				"deployBlock": 19776007,
-				"abisType": "normal"
+				"modifiers": {
+					"abisType": "normal"
+				}
 			},
 			"flexProtocol": {
 				"TroveManager": "0xc2d0720721d48ce85e20dc9e01b8449d7edd14ce",
@@ -82,7 +86,9 @@
 				"LQTYToken": "0x9c6fa17d92898b684676993828143596894aa2a6",
 				"Collateral": "0x2b591e99afe9f32eaa6214f7b7629768c40eeb39",
 				"deployBlock": 20255152,
-				"abisType": "normal"
+				"modifiers": {
+					"abisType": "normal"
+				}
 			},
 			"incPrinter": {
 				"TroveManager": "0x248262ea52198643dd1512ce7a2c93b32a03e45f",
@@ -99,7 +105,9 @@
 				"LQTYToken": "0x6c203a555824ec90a215f37916cf8db58ebe2fa3",
 				"Collateral": "0x2fa878ab3f87cc1c9737fc071108f904c0b0c95d",
 				"deployBlock": 22980752,
-				"abisType": "normal"
+				"modifiers": {
+					"abisType": "normal"
+				}
 			}
 		}
 	}
