@@ -8,93 +8,70 @@ import { getAbiItem } from '../protocols/modify';
 import { protocols } from '../protocols/protocols';
 import { getCachedState, setCachedState, updateCachedState } from './cache';
 
-type DerivedFrom = 'event' | 'liquidation' | 'redemption';
-
 export type GlobalState = {
-	LUSD_GAS_COMPENSATION: bigint;
-	PERCENT_DIVISOR: bigint;
-	_100pct: bigint;
-	MCR: bigint;
-	CCR: bigint;
+	DECIMAL_PRECISION: bigint;
+	SCALE_FACTOR: bigint;
 
-	totalColl: {
-		balance: bigint;
+	// Stability Pool
+	frontEnds: {
+		frontEnd: Address;
+		kickbackRate: bigint;
 		blockNumber: bigint;
 		transactionIndex: number;
-		nthEventInTxn: number; // 0 indexed
 		timestamp: bigint;
-		derivedFrom: DerivedFrom;
 	}[];
-	totalDebt: {
-		balance: bigint;
+	globalP: {
+		P: bigint;
 		blockNumber: bigint;
 		transactionIndex: number;
-		nthEventInTxn: number;
 		timestamp: bigint;
-		derivedFrom: DerivedFrom;
 	}[];
-	totalStakes: {
-		amount: bigint;
+	globalS: {
+		S: bigint;
 		blockNumber: bigint;
 		transactionIndex: number;
-		nthEventInTxn: number;
 		timestamp: bigint;
-		derivedFrom: DerivedFrom;
 	}[];
-	totalStakedLQTY: {
-		balance: bigint;
+	globalG: {
+		G: bigint;
 		blockNumber: bigint;
 		transactionIndex: number;
-		nthEventInTxn: number;
 		timestamp: bigint;
-		derivedFrom: DerivedFrom;
 	}[];
-	totalDepositedLUSD: {
-		balance: bigint;
+	globalScale: {
+		scale: bigint;
 		blockNumber: bigint;
 		transactionIndex: number;
-		nthEventInTxn: number;
 		timestamp: bigint;
-		derivedFrom: DerivedFrom;
 	}[];
-	liquidations: {
-		borrower: Address;
-		coll: bigint;
-		debt: bigint;
-		operation: (typeof troveManagerOperationEnum)[1 | 2];
+	globalEpoch: {
+		epoch: bigint;
 		blockNumber: bigint;
 		transactionIndex: number;
-		nthEventInTxn: number;
 		timestamp: bigint;
-		derivedFrom: DerivedFrom;
 	}[];
-	// Used only for tracking fees, redemptions on user tracked by TroveUpdated
-	redemptions: {
-		attemptedLUSDAmount: bigint;
-		actualLUSDAmount: bigint;
-		ETHSent: bigint;
-		ETHFee: bigint;
+
+	// Trove Manager
+	globalLTerms: {
+		lEth: bigint;
+		lLusd: bigint;
 		blockNumber: bigint;
 		transactionIndex: number;
-		nthEventInTxn: number;
 		timestamp: bigint;
-		derivedFrom: DerivedFrom;
 	}[];
-	LUSDBorrowingFeePaid: {
-		LUSDFee: bigint;
+
+	// LQTY Staking
+	globalFEth: {
+		fEth: bigint;
 		blockNumber: bigint;
 		transactionIndex: number;
-		nthEventInTxn: number;
 		timestamp: bigint;
-		derivedFrom: DerivedFrom;
 	}[];
-	prices: {
-		price: bigint;
+	globalFLusd: {
+		fLusd: bigint;
 		blockNumber: bigint;
 		transactionIndex: number;
-		nthEventInTxn: number;
 		timestamp: bigint;
-		derivedFrom: DerivedFrom;
 	}[];
 };
 
@@ -103,643 +80,339 @@ export async function getGlobalState(
 	client: PublicClient
 ): Promise<GlobalState> {
 	const cachedState = (await getCachedState<
-		Omit<
-			GlobalState,
-			| 'LUSD_GAS_COMPENSATION'
-			| 'PERCENT_DIVISOR'
-			| '_100pct'
-			| 'MCR'
-			| 'CCR'
-		>
+		Omit<GlobalState, 'DECIMAL_PRECISION' | 'SCALE_FACTOR'>
 	>(protocol, 'globalState')) ?? {
-		totalColl: [],
-		totalDebt: [],
-		totalStakes: [],
-		totalStakedLQTY: [],
-		totalDepositedLUSD: [],
-		liquidations: [],
-		redemptions: [],
-		LUSDBorrowingFeePaid: [],
-		prices: []
+		frontEnds: [],
+		globalP: [],
+		globalS: [],
+		globalG: [],
+		globalScale: [],
+		globalEpoch: [],
+		globalLTerms: [],
+		globalFEth: [],
+		globalFLusd: []
 	};
 
-	// LUSD Gas Compensation
-	const LUSD_GAS_COMPENSATIONAbi = getAbiItem(
+	// DECIMAL_PRECISION
+	const DECIMAL_PRECISIONAbi = getAbiItem(
 		protocol,
 		'troveManager',
-		'LUSD_GAS_COMPENSATION'
+		'DECIMAL_PRECISION'
 	);
-	// prettier-ignore
-	const LUSD_GAS_COMPENSATION = await client.readContract({
+	const DECIMAL_PRECISION = await client.readContract({
 		address: protocols[protocol].troveManager,
-		abi: [LUSD_GAS_COMPENSATIONAbi],
-		functionName: 'LUSD_GAS_COMPENSATION'
+		abi: [DECIMAL_PRECISIONAbi],
+		functionName: 'DECIMAL_PRECISION'
 	});
 
-	// PERCENT_DIVISOR
-	const PERCENT_DIVISORAbi = getAbiItem(
-		protocol,
-		'troveManager',
-		'PERCENT_DIVISOR'
-	);
-	const PERCENT_DIVISOR = await client.readContract({
-		address: protocols[protocol].troveManager,
-		abi: [PERCENT_DIVISORAbi],
-		functionName: 'PERCENT_DIVISOR'
-	});
-
-	// _100pct
-	const _100pctAbi = getAbiItem(protocol, 'troveManager', '_100pct');
-	const _100pct = await client.readContract({
-		address: protocols[protocol].troveManager,
-		abi: [_100pctAbi],
-		functionName: '_100pct'
-	});
-
-	// MCR
-	const MCRAbi = getAbiItem(protocol, 'troveManager', 'MCR');
-	const MCR = await client.readContract({
-		address: protocols[protocol].troveManager,
-		abi: [MCRAbi],
-		functionName: 'MCR'
-	});
-
-	// CCR
-	const CCRAbi = getAbiItem(protocol, 'troveManager', 'CCR');
-	const CCR = await client.readContract({
-		address: protocols[protocol].troveManager,
-		abi: [CCRAbi],
-		functionName: 'CCR'
-	});
-
-	// ETH Coll
-	const activePoolETHBalanceUpdatedAbi = getAbiItem(
-		protocol,
-		'activePool',
-		'ActivePoolETHBalanceUpdated'
-	);
-	// prettier-ignore
-	const activePoolETHBalanceUpdated = await client.getContractEvents({
-		address: protocols[protocol].activePool,
-		abi: [activePoolETHBalanceUpdatedAbi],
-		eventName: activePoolETHBalanceUpdatedAbi.name,
-		fromBlock:
-			cachedState.totalColl.length > 0
-				? cachedState.totalColl[cachedState.totalColl.length - 1]!
-			.blockNumber + 1n
-		: protocols[protocol].deployBlock,
-		toBlock: 'latest'
-	});
-	cachedState.totalColl.push(
-		...activePoolETHBalanceUpdated.reduce<
-			{
-				balance: bigint;
-				blockNumber: bigint;
-				transactionIndex: number;
-				nthEventInTxn: number;
-				timestamp: bigint;
-				derivedFrom: DerivedFrom;
-			}[]
-		>((acc, e) => {
-			const _ETH = replaceBrandedWordsInString(
-				'_ETH',
-				protocols[protocol].modifiers
-			) as ReplaceBrandedWordsInStringForAllProtocols<'_ETH'>;
-
-			const balance = e.args[
-				_ETH as keyof typeof e.args
-			] as ExtractUnionValue<
-				typeof e.args,
-				ReplaceBrandedWordsInStringForAllProtocols<'_ETH'>
-			>;
-
-			const prevEvent = acc[acc.length - 1];
-			const nthEventInTxn =
-				prevEvent?.transactionIndex === e.transactionIndex &&
-				prevEvent?.blockNumber === e.blockNumber
-					? prevEvent.nthEventInTxn + 1
-					: 0;
-
-			acc.push({
-				balance: balance!,
-				blockNumber: e.blockNumber,
-				transactionIndex: e.transactionIndex,
-				nthEventInTxn,
-				timestamp: e.blockTimestamp!,
-				derivedFrom: 'event'
-			});
-
-			return acc;
-		}, [])
-	);
-
-	// LUSD Debt
-	const activePoolLUSDDebtUpdatedAbi = getAbiItem(
-		protocol,
-		'activePool',
-		'ActivePoolLUSDDebtUpdated'
-	);
-	// prettier-ignore
-	const activePoolLUSDDebtUpdated = await client.getContractEvents({
-		address: protocols[protocol].activePool,
-		abi: [activePoolLUSDDebtUpdatedAbi],
-		eventName: activePoolLUSDDebtUpdatedAbi.name,
-		fromBlock:
-			cachedState.totalDebt.length > 0
-				? cachedState.totalDebt[cachedState.totalDebt.length - 1]!
-					.blockNumber + 1n
-				: protocols[protocol].deployBlock,
-		toBlock: 'latest'
-	});
-	cachedState.totalDebt.push(
-		...activePoolLUSDDebtUpdated.reduce<
-			{
-				balance: bigint;
-				blockNumber: bigint;
-				transactionIndex: number;
-				nthEventInTxn: number;
-				timestamp: bigint;
-				derivedFrom: DerivedFrom;
-			}[]
-		>((acc, e) => {
-			const _LUSDDebt = replaceBrandedWordsInString(
-				'_LUSDDebt',
-				protocols[protocol].modifiers
-			) as ReplaceBrandedWordsInStringForAllProtocols<'_LUSDDebt'>;
-
-			const balance = e.args[
-				_LUSDDebt as keyof typeof e.args
-			] as ExtractUnionValue<
-				typeof e.args,
-				ReplaceBrandedWordsInStringForAllProtocols<'_LUSDDebt'>
-			>;
-
-			const prevEvent = acc[acc.length - 1];
-			const nthEventInTxn =
-				prevEvent?.transactionIndex === e.transactionIndex &&
-				prevEvent?.blockNumber === e.blockNumber
-					? prevEvent.nthEventInTxn + 1
-					: 0;
-
-			acc.push({
-				balance: balance!,
-				blockNumber: e.blockNumber,
-				transactionIndex: e.transactionIndex,
-				nthEventInTxn,
-				timestamp: e.blockTimestamp!,
-				derivedFrom: 'event'
-			});
-
-			return acc;
-		}, [])
-	);
-
-	// Total Stakes
-	const totalStakesUpdatedAbi = getAbiItem(
-		protocol,
-		'troveManager',
-		'TotalStakesUpdated'
-	);
-	// prettier-ignore
-	const totalStakesUpdated = await client.getContractEvents({
-		address: protocols[protocol].troveManager,
-		abi: [totalStakesUpdatedAbi],
-		eventName: totalStakesUpdatedAbi.name,
-		fromBlock:
-			cachedState.totalStakes.length > 0
-				? cachedState.totalStakes[cachedState.totalStakes.length - 1]!
-					.blockNumber + 1n
-				: protocols[protocol].deployBlock,
-		toBlock: 'latest'
-	});
-	cachedState.totalStakes.push(
-		...totalStakesUpdated.reduce<
-			{
-				amount: bigint;
-				blockNumber: bigint;
-				transactionIndex: number;
-				nthEventInTxn: number;
-				timestamp: bigint;
-				derivedFrom: DerivedFrom;
-			}[]
-		>((acc, e) => {
-			const _totalStakes = e.args._newTotalStakes;
-
-			const prevEvent = acc[acc.length - 1];
-			const nthEventInTxn =
-				prevEvent?.transactionIndex === e.transactionIndex &&
-				prevEvent?.blockNumber === e.blockNumber
-					? prevEvent.nthEventInTxn + 1
-					: 0;
-
-			acc.push({
-				amount: _totalStakes!,
-				blockNumber: e.blockNumber,
-				transactionIndex: e.transactionIndex,
-				nthEventInTxn,
-				timestamp: e.blockTimestamp!,
-				derivedFrom: 'event'
-			});
-
-			return acc;
-		}, [])
-	);
-
-	// LQTY Staked
-	const totalLQTYStakedUpdatedAbi = getAbiItem(
-		protocol,
-		'lqtyStaking',
-		'TotalLQTYStakedUpdated'
-	);
-	// prettier-ignore
-	const totalLQTYStakedUpdated = await client.getContractEvents({
-		address: protocols[protocol].lqtyStaking,
-		abi: [totalLQTYStakedUpdatedAbi],
-		eventName: totalLQTYStakedUpdatedAbi.name,
-		fromBlock:
-			cachedState.totalStakedLQTY.length > 0
-				? cachedState.totalStakedLQTY[
-					cachedState.totalStakedLQTY.length - 1
-				]!.blockNumber + 1n
-				: protocols[protocol].deployBlock,
-		toBlock: 'latest'
-	});
-	cachedState.totalStakedLQTY.push(
-		...totalLQTYStakedUpdated.reduce<
-			{
-				balance: bigint;
-				blockNumber: bigint;
-				transactionIndex: number;
-				nthEventInTxn: number;
-				timestamp: bigint;
-				derivedFrom: DerivedFrom;
-			}[]
-		>((acc, e) => {
-			const _totalLQTYStaked = replaceBrandedWordsInString(
-				'_totalLQTYStaked',
-				protocols[protocol].modifiers
-			) as ReplaceBrandedWordsInStringForAllProtocols<'_totalLQTYStaked'>;
-
-			const balance = e.args[
-				_totalLQTYStaked as keyof typeof e.args
-			] as ExtractUnionValue<
-				typeof e.args,
-				ReplaceBrandedWordsInStringForAllProtocols<'_totalLQTYStaked'>
-			>;
-
-			const prevEvent = acc[acc.length - 1];
-			const nthEventInTxn =
-				prevEvent?.transactionIndex === e.transactionIndex &&
-				prevEvent?.blockNumber === e.blockNumber
-					? prevEvent.nthEventInTxn + 1
-					: 0;
-
-			acc.push({
-				balance: balance!,
-				blockNumber: e.blockNumber,
-				transactionIndex: e.transactionIndex,
-				nthEventInTxn,
-				timestamp: e.blockTimestamp!,
-				derivedFrom: 'event'
-			});
-
-			return acc;
-		}, [])
-	);
-
-	// LUSD Deposited
-	const stabilityPoolLUSDBalanceUpdatedAbi = getAbiItem(
+	// SCALE_FACTOR
+	const SCALE_FACTORAbi = getAbiItem(
 		protocol,
 		'stabilityPool',
-		'StabilityPoolLUSDBalanceUpdated'
+		'SCALE_FACTOR'
 	);
-	// prettier-ignore
-	const stabilityPoolLUSDBalanceUpdated = await client.getContractEvents({
+	const SCALE_FACTOR = await client.readContract({
 		address: protocols[protocol].stabilityPool,
-		abi: [stabilityPoolLUSDBalanceUpdatedAbi],
-		eventName: stabilityPoolLUSDBalanceUpdatedAbi.name,
+		abi: [SCALE_FACTORAbi],
+		functionName: 'SCALE_FACTOR'
+	});
+
+	// frontEnds
+	const frontEndRegisteredAbi = getAbiItem(
+		protocol,
+		'stabilityPool',
+		'FrontEndRegistered'
+	);
+	const frontEndRegistered = await client.getContractEvents({
+		address: protocols[protocol].stabilityPool,
+		abi: [frontEndRegisteredAbi],
+		eventName: frontEndRegisteredAbi.name,
+		// prettier-ignore
 		fromBlock:
-			cachedState.totalDepositedLUSD.length > 0
-				? cachedState.totalDepositedLUSD[
-					cachedState.totalDepositedLUSD.length - 1
-				]!.blockNumber + 1n
+			cachedState.frontEnds.length > 0
+				? cachedState.frontEnds[cachedState.frontEnds.length - 1]!
+					.blockNumber + 1n
 				: protocols[protocol].deployBlock,
 		toBlock: 'latest'
 	});
-	cachedState.totalDepositedLUSD.push(
-		...stabilityPoolLUSDBalanceUpdated.reduce<
-			{
-				balance: bigint;
-				blockNumber: bigint;
-				transactionIndex: number;
-				nthEventInTxn: number;
-				timestamp: bigint;
-				derivedFrom: DerivedFrom;
-			}[]
-		>((acc, e) => {
-			const _newBalance = e.args._newBalance;
-
-			const prevEvent = acc[acc.length - 1];
-			const nthEventInTxn =
-				prevEvent?.transactionIndex === e.transactionIndex &&
-				prevEvent?.blockNumber === e.blockNumber
-					? prevEvent.nthEventInTxn + 1
-					: 0;
-
-			acc.push({
-				balance: _newBalance!,
+	cachedState.frontEnds.push(
+		...frontEndRegistered.map((e) => {
+			return {
+				frontEnd: e.args._frontEnd!,
+				kickbackRate: e.args._kickbackRate!,
 				blockNumber: e.blockNumber,
 				transactionIndex: e.transactionIndex,
-				nthEventInTxn,
-				timestamp: e.blockTimestamp!,
-				derivedFrom: 'event'
-			});
-
-			return acc;
-		}, [])
+				timestamp: e.blockTimestamp!
+			};
+		})
 	);
 
-	// Liquidations
-	const liquidationsAbi = getAbiItem(
+	// globalP
+	const pUpdatedAbi = getAbiItem(protocol, 'stabilityPool', 'P_Updated');
+	const pUpdated = await client.getContractEvents({
+		address: protocols[protocol].stabilityPool,
+		abi: [pUpdatedAbi],
+		eventName: pUpdatedAbi.name,
+		// prettier-ignore
+		fromBlock:
+			cachedState.globalP.length > 0
+				? cachedState.globalP[cachedState.globalP.length - 1]!
+					.blockNumber + 1n
+				: protocols[protocol].deployBlock,
+		toBlock: 'latest'
+	});
+	cachedState.globalP.push(
+		...pUpdated.map((e) => {
+			return {
+				P: e.args._P!,
+				blockNumber: e.blockNumber,
+				transactionIndex: e.transactionIndex,
+				timestamp: e.blockTimestamp!
+			};
+		})
+	);
+
+	// globalS
+	const sUpdatedAbi = getAbiItem(protocol, 'stabilityPool', 'S_Updated');
+	const sUpdated = await client.getContractEvents({
+		address: protocols[protocol].stabilityPool,
+		abi: [sUpdatedAbi],
+		eventName: sUpdatedAbi.name,
+		// prettier-ignore
+		fromBlock:
+			cachedState.globalS.length > 0
+				? cachedState.globalS[cachedState.globalS.length - 1]!
+					.blockNumber + 1n
+				: protocols[protocol].deployBlock,
+		toBlock: 'latest'
+	});
+	cachedState.globalS.push(
+		...sUpdated.map((e) => {
+			return {
+				S: e.args._S!,
+				blockNumber: e.blockNumber,
+				transactionIndex: e.transactionIndex,
+				timestamp: e.blockTimestamp!
+			};
+		})
+	);
+
+	// globalG
+	const gUpdatedAbi = getAbiItem(protocol, 'stabilityPool', 'G_Updated');
+	const gUpdated = await client.getContractEvents({
+		address: protocols[protocol].stabilityPool,
+		abi: [gUpdatedAbi],
+		eventName: gUpdatedAbi.name,
+		// prettier-ignore
+		fromBlock:
+			cachedState.globalG.length > 0
+				? cachedState.globalG[cachedState.globalG.length - 1]!
+					.blockNumber + 1n
+				: protocols[protocol].deployBlock,
+		toBlock: 'latest'
+	});
+	cachedState.globalG.push(
+		...gUpdated.map((e) => {
+			return {
+				G: e.args._G!,
+				blockNumber: e.blockNumber,
+				transactionIndex: e.transactionIndex,
+				timestamp: e.blockTimestamp!
+			};
+		})
+	);
+
+	// globalScale
+	const scaleUpdatedAbi = getAbiItem(
+		protocol,
+		'stabilityPool',
+		'ScaleUpdated'
+	);
+	const scaleUpdated = await client.getContractEvents({
+		address: protocols[protocol].stabilityPool,
+		abi: [scaleUpdatedAbi],
+		eventName: scaleUpdatedAbi.name,
+		// prettier-ignore
+		fromBlock:
+			cachedState.globalScale.length > 0
+				? cachedState.globalScale[cachedState.globalScale.length - 1]!
+					.blockNumber + 1n
+				: protocols[protocol].deployBlock,
+		toBlock: 'latest'
+	});
+	cachedState.globalScale.push(
+		...scaleUpdated.map((e) => {
+			return {
+				scale: e.args._currentScale!,
+				blockNumber: e.blockNumber,
+				transactionIndex: e.transactionIndex,
+				timestamp: e.blockTimestamp!
+			};
+		})
+	);
+
+	// globalEpoch
+	const epochUpdatedAbi = getAbiItem(
+		protocol,
+		'stabilityPool',
+		'EpochUpdated'
+	);
+	const epochUpdated = await client.getContractEvents({
+		address: protocols[protocol].stabilityPool,
+		abi: [epochUpdatedAbi],
+		eventName: epochUpdatedAbi.name,
+		// prettier-ignore
+		fromBlock:
+			cachedState.globalEpoch.length > 0
+				? cachedState.globalEpoch[cachedState.globalEpoch.length - 1]!
+					.blockNumber + 1n
+				: protocols[protocol].deployBlock,
+		toBlock: 'latest'
+	});
+	cachedState.globalEpoch.push(
+		...epochUpdated.map((e) => {
+			return {
+				epoch: e.args._currentEpoch!,
+				blockNumber: e.blockNumber,
+				transactionIndex: e.transactionIndex,
+				timestamp: e.blockTimestamp!
+			};
+		})
+	);
+
+	// globalLTerms
+	const lTermsUpdatedAbi = getAbiItem(
 		protocol,
 		'troveManager',
-		'TroveLiquidated'
+		'LTermsUpdated'
 	);
-	// prettier-ignore
-	const liquidations = await client.getContractEvents({
+	const lTermsUpdated = await client.getContractEvents({
 		address: protocols[protocol].troveManager,
-		abi: [liquidationsAbi],
-		eventName: liquidationsAbi.name,
+		abi: [lTermsUpdatedAbi],
+		eventName: lTermsUpdatedAbi.name,
+		// prettier-ignore
 		fromBlock:
-			cachedState.liquidations.length > 0
-				? cachedState.liquidations[cachedState.liquidations.length - 1]!
+			cachedState.globalLTerms.length > 0
+				? cachedState.globalLTerms[cachedState.globalLTerms.length - 1]!
 					.blockNumber + 1n
 				: protocols[protocol].deployBlock,
 		toBlock: 'latest'
 	});
-	cachedState.liquidations.push(
-		...liquidations.reduce<
-			{
-				borrower: Address;
-				coll: bigint;
-				debt: bigint;
-				operation: (typeof troveManagerOperationEnum)[1 | 2];
-				blockNumber: bigint;
-				transactionIndex: number;
-				nthEventInTxn: number;
-				timestamp: bigint;
-				derivedFrom: DerivedFrom;
-			}[]
-		>((acc, e) => {
-			const borrower = e.args._borrower;
-			const coll = e.args._coll;
-			const debt = e.args._debt;
-			const operation =
-				troveManagerOperationEnum[e.args._operation! as 1 | 2];
+	cachedState.globalLTerms.push(
+		...lTermsUpdated.map((e) => {
+			const _L_ETH = replaceBrandedWordsInString(
+				'_L_ETH',
+				protocols[protocol].modifiers
+			) as ReplaceBrandedWordsInStringForAllProtocols<'_L_ETH'>;
 
-			const prevLiquidation = acc[acc.length - 1];
-			const nthEventInTxn =
-				prevLiquidation?.transactionIndex === e.transactionIndex &&
-				prevLiquidation?.blockNumber === e.blockNumber
-					? prevLiquidation.nthEventInTxn + 1
-					: 0;
+			const lEth = e.args[
+				_L_ETH as keyof typeof e.args
+			] as ExtractUnionValue<
+				typeof e.args,
+				ReplaceBrandedWordsInStringForAllProtocols<'_L_ETH'>
+			>;
 
-			acc.push({
-				borrower: borrower!,
-				coll: coll!,
-				debt: debt!,
-				operation: operation!,
+			const _L_LUSDDebt = replaceBrandedWordsInString(
+				'_L_LUSDDebt',
+				protocols[protocol].modifiers
+			) as ReplaceBrandedWordsInStringForAllProtocols<'_L_LUSDDebt'>;
+			const lLusd = e.args[
+				_L_LUSDDebt as keyof typeof e.args
+			] as ExtractUnionValue<
+				typeof e.args,
+				ReplaceBrandedWordsInStringForAllProtocols<'_L_LUSDDebt'>
+			>;
+
+			return {
+				lEth: lEth!,
+				lLusd: lLusd!,
 				blockNumber: e.blockNumber,
 				transactionIndex: e.transactionIndex,
-				nthEventInTxn,
-				timestamp: e.blockTimestamp!,
-				derivedFrom: 'event'
-			});
-
-			return acc;
-		}, [])
+				timestamp: e.blockTimestamp!
+			};
+		})
 	);
 
-	// Redemptions
-	const redemptionsAbi = getAbiItem(protocol, 'troveManager', 'Redemption');
-	// prettier-ignore
-	const redemptions = await client.getContractEvents({
-		address: protocols[protocol].troveManager,
-		abi: [redemptionsAbi],
-		eventName: redemptionsAbi.name,
+	// globalFEth
+	const fEthUpdatedAbi = getAbiItem(protocol, 'lqtyStaking', 'F_ETHUpdated');
+	const fEthUpdated = await client.getContractEvents({
+		address: protocols[protocol].lqtyStaking,
+		abi: [fEthUpdatedAbi],
+		eventName: fEthUpdatedAbi.name,
+		// prettier-ignore
 		fromBlock:
-			cachedState.redemptions.length > 0
-				? cachedState.redemptions[cachedState.redemptions.length - 1]!
-				.blockNumber + 1n
-				: protocols[protocol].deployBlock,
-		toBlock: 'latest'
-	});
-	cachedState.redemptions.push(
-		...redemptions.reduce<
-			{
-				attemptedLUSDAmount: bigint;
-				actualLUSDAmount: bigint;
-				ETHSent: bigint;
-				ETHFee: bigint;
-				blockNumber: bigint;
-				transactionIndex: number;
-				nthEventInTxn: number;
-				timestamp: bigint;
-				derivedFrom: DerivedFrom;
-			}[]
-		>((acc, e) => {
-			const _attemptedLUSDAmount = replaceBrandedWordsInString(
-				'_attemptedLUSDAmount',
-				protocols[protocol].modifiers
-			) as ReplaceBrandedWordsInStringForAllProtocols<'_attemptedLUSDAmount'>;
-
-			const attemptedLUSD = e.args[
-				_attemptedLUSDAmount as keyof typeof e.args
-			] as ExtractUnionValue<
-				typeof e.args,
-				ReplaceBrandedWordsInStringForAllProtocols<'_attemptedLUSDAmount'>
-			>;
-
-			const _actualLUSDAmount = replaceBrandedWordsInString(
-				'_actualLUSDAmount',
-				protocols[protocol].modifiers
-			) as ReplaceBrandedWordsInStringForAllProtocols<'_actualLUSDAmount'>;
-
-			const actualLUSD = e.args[
-				_actualLUSDAmount as keyof typeof e.args
-			] as ExtractUnionValue<
-				typeof e.args,
-				ReplaceBrandedWordsInStringForAllProtocols<'_actualLUSDAmount'>
-			>;
-
-			const _ETHSent = replaceBrandedWordsInString(
-				'_ETHSent',
-				protocols[protocol].modifiers
-			) as ReplaceBrandedWordsInStringForAllProtocols<'_ETHSent'>;
-
-			const ethSent = e.args[
-				_ETHSent as keyof typeof e.args
-			] as ExtractUnionValue<
-				typeof e.args,
-				ReplaceBrandedWordsInStringForAllProtocols<'_ETHSent'>
-			>;
-
-			const _ETHFee = replaceBrandedWordsInString(
-				'_ETHFee',
-				protocols[protocol].modifiers
-			) as ReplaceBrandedWordsInStringForAllProtocols<'_ETHFee'>;
-
-			const ethFee = e.args[
-				_ETHFee as keyof typeof e.args
-			] as ExtractUnionValue<
-				typeof e.args,
-				ReplaceBrandedWordsInStringForAllProtocols<'_ETHFee'>
-			>;
-
-			const prevRedemption = acc[acc.length - 1];
-			const nthEventInTxn =
-				prevRedemption?.transactionIndex === e.transactionIndex &&
-				prevRedemption?.blockNumber === e.blockNumber
-					? prevRedemption.nthEventInTxn + 1
-					: 0;
-
-			acc.push({
-				attemptedLUSDAmount: attemptedLUSD!,
-				actualLUSDAmount: actualLUSD!,
-				ETHSent: ethSent!,
-				ETHFee: ethFee!,
-				blockNumber: e.blockNumber,
-				transactionIndex: e.transactionIndex,
-				nthEventInTxn,
-				timestamp: e.blockTimestamp!,
-				derivedFrom: 'event'
-			});
-
-			return acc;
-		}, [])
-	);
-
-	// LUSD Borrowing fee paid
-	const LUSDBorrowingFeePaidAbi = getAbiItem(
-		protocol,
-		'borrowerOperations',
-		'LUSDBorrowingFeePaid'
-	);
-	// prettier-ignore
-	const LUSDBorrowingFeePaid = await client.getContractEvents({
-		address: protocols[protocol].borrowerOperations,
-		abi: [LUSDBorrowingFeePaidAbi],
-		eventName: LUSDBorrowingFeePaidAbi.name,
-		fromBlock:
-			cachedState.LUSDBorrowingFeePaid.length > 0
-				? cachedState.LUSDBorrowingFeePaid[
-					cachedState.LUSDBorrowingFeePaid.length - 1
-				]!.blockNumber + 1n
-				: protocols[protocol].deployBlock,
-		toBlock: 'latest'
-	});
-	cachedState.LUSDBorrowingFeePaid.push(
-		...LUSDBorrowingFeePaid.reduce<
-			{
-				LUSDFee: bigint;
-				blockNumber: bigint;
-				transactionIndex: number;
-				nthEventInTxn: number;
-				timestamp: bigint;
-				derivedFrom: DerivedFrom;
-			}[]
-		>((acc, e) => {
-			const _LUSDFee = replaceBrandedWordsInString(
-				'_LUSDFee',
-				protocols[protocol].modifiers
-			) as ReplaceBrandedWordsInStringForAllProtocols<'_LUSDFee'>;
-
-			const fee = e.args[
-				_LUSDFee as keyof typeof e.args
-			] as ExtractUnionValue<
-				typeof e.args,
-				ReplaceBrandedWordsInStringForAllProtocols<'_LUSDFee'>
-			>;
-
-			const prevEvent = acc[acc.length - 1];
-			const nthEventInTxn =
-				prevEvent?.transactionIndex === e.transactionIndex &&
-				prevEvent?.blockNumber === e.blockNumber
-					? prevEvent.nthEventInTxn + 1
-					: 0;
-
-			acc.push({
-				LUSDFee: fee!,
-				blockNumber: e.blockNumber,
-				transactionIndex: e.transactionIndex,
-				nthEventInTxn,
-				timestamp: e.blockTimestamp!,
-				derivedFrom: 'event'
-			});
-
-			return acc;
-		}, [])
-	);
-
-	// Last Good Price
-	const lastGoodPriceUpdatedAbi = getAbiItem(
-		protocol,
-		'priceFeed',
-		'LastGoodPriceUpdated'
-	);
-	// prettier-ignore
-	const lastGoodPriceUpdated = await client.getContractEvents({
-		address: protocols[protocol].priceFeed,
-		abi: [lastGoodPriceUpdatedAbi],
-		eventName: lastGoodPriceUpdatedAbi.name,
-		fromBlock:
-			cachedState.prices.length > 0
-				? cachedState.prices[cachedState.prices.length - 1]!
+			cachedState.globalFEth.length > 0
+				? cachedState.globalFEth[cachedState.globalFEth.length - 1]!
 					.blockNumber + 1n
 				: protocols[protocol].deployBlock,
 		toBlock: 'latest'
 	});
-	cachedState.prices.push(
-		...lastGoodPriceUpdated.reduce<
-			{
-				price: bigint;
-				blockNumber: bigint;
-				transactionIndex: number;
-				nthEventInTxn: number;
-				timestamp: bigint;
-				derivedFrom: DerivedFrom;
-			}[]
-		>((acc, e) => {
-			const price = e.args._lastGoodPrice;
+	cachedState.globalFEth.push(
+		...fEthUpdated.map((e) => {
+			const _fEth = replaceBrandedWordsInString(
+				'_F_ETH',
+				protocols[protocol].modifiers
+			) as ReplaceBrandedWordsInStringForAllProtocols<'_F_ETH'>;
+			const balance = e.args[
+				_fEth as keyof typeof e.args
+			] as ExtractUnionValue<
+				typeof e.args,
+				ReplaceBrandedWordsInStringForAllProtocols<'_F_ETH'>
+			>;
 
-			const prevEvent = acc[acc.length - 1];
-			const nthEventInTxn =
-				prevEvent?.transactionIndex === e.transactionIndex &&
-				prevEvent?.blockNumber === e.blockNumber
-					? prevEvent.nthEventInTxn + 1
-					: 0;
-
-			acc.push({
-				price: price!,
+			return {
+				fEth: balance!,
 				blockNumber: e.blockNumber,
 				transactionIndex: e.transactionIndex,
-				nthEventInTxn,
-				timestamp: e.blockTimestamp!,
-				derivedFrom: 'event'
-			});
-
-			return acc;
-		}, [])
+				timestamp: e.blockTimestamp!
+			};
+		})
 	);
 
+	// globalFLusd
+	const fLusdUpdatedAbi = getAbiItem(
+		protocol,
+		'lqtyStaking',
+		'F_LUSDUpdated'
+	);
+	const fLusdUpdated = await client.getContractEvents({
+		address: protocols[protocol].lqtyStaking,
+		abi: [fLusdUpdatedAbi],
+		eventName: fLusdUpdatedAbi.name,
+		// prettier-ignore
+		fromBlock:
+			cachedState.globalFLusd.length > 0
+				? cachedState.globalFLusd[cachedState.globalFLusd.length - 1]!
+					.blockNumber + 1n
+				: protocols[protocol].deployBlock,
+		toBlock: 'latest'
+	});
+	cachedState.globalFLusd.push(
+		...fLusdUpdated.map((e) => {
+			const _fLusd = replaceBrandedWordsInString(
+				'_F_LUSD',
+				protocols[protocol].modifiers
+			) as ReplaceBrandedWordsInStringForAllProtocols<'_F_LUSD'>;
+			const balance = e.args[
+				_fLusd as keyof typeof e.args
+			] as ExtractUnionValue<
+				typeof e.args,
+				ReplaceBrandedWordsInStringForAllProtocols<'_F_LUSD'>
+			>;
+
+			return {
+				fLusd: balance!,
+				blockNumber: e.blockNumber,
+				transactionIndex: e.transactionIndex,
+				timestamp: e.blockTimestamp!
+			};
+		})
+	);
 	await setCachedState(protocol, 'globalState', cachedState);
 
 	return {
-		LUSD_GAS_COMPENSATION,
-		PERCENT_DIVISOR,
-		_100pct,
-		MCR,
-		CCR,
+		DECIMAL_PRECISION,
+		SCALE_FACTOR,
 		...cachedState
 	};
 }

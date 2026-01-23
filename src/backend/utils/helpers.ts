@@ -21,3 +21,29 @@ export type ExtractUnionValue<
 export type Prettify<T> = {
 	[K in keyof T]: T[K];
 } & {};
+
+export function isBefore(
+	subject: { blockNumber: bigint; transactionIndex: number; },
+	reference: { blockNumber: bigint; transactionIndex: number; }
+) {
+	if (subject.blockNumber < reference.blockNumber) return true;
+	if (subject.blockNumber > reference.blockNumber) return false;
+	return subject.transactionIndex < reference.transactionIndex;
+}
+
+export function isSameTxn(
+	subject: { blockNumber: bigint; transactionIndex: number; },
+	reference: { blockNumber: bigint; transactionIndex: number; }
+) {
+	return subject.blockNumber === reference.blockNumber &&
+		subject.transactionIndex === reference.transactionIndex;
+}
+
+export function isAfter(
+	subject: { blockNumber: bigint; transactionIndex: number; },
+	reference: { blockNumber: bigint; transactionIndex: number; }
+) {
+	if (subject.blockNumber > reference.blockNumber) return true;
+	if (subject.blockNumber < reference.blockNumber) return false;
+	return subject.transactionIndex > reference.transactionIndex;
+}

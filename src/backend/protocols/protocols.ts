@@ -7,7 +7,7 @@ export const chains = {
 	pulsechain: {
 		name: 'pulsechain',
 		weth: '0xA1077a294dDE1B09bB078844df40758a5D0f9a27',
-		rpc: 'https://rpc.pulsechain.com'
+		rpc: 'https://rpc-pulsechain.g4mm4.io'
 	}
 } as const;
 

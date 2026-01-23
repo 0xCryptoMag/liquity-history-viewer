@@ -1,4 +1,5 @@
 import { APITester } from "./APITester";
+import { TimelineTester } from "./TimelineTester";
 import "./index.css";
 
 import logo from "./logo.svg";
@@ -20,11 +21,14 @@ export function App() {
         />
       </div>
 
-      <h1 className="text-5xl font-bold my-4 leading-tight">Bun + React</h1>
-      <p>
-        Edit <code className="bg-[#1a1a1a] px-2 py-1 rounded font-mono">src/App.tsx</code> and save to test HMR
+      <h1 className="text-5xl font-bold my-4 leading-tight">Liquity History Viewer</h1>
+      <p className="mb-8">
+        Test the timeline constructor function
       </p>
-      <APITester />
+      <TimelineTester />
+      <div className="mt-12">
+        <APITester />
+      </div>
     </div>
   );
 }

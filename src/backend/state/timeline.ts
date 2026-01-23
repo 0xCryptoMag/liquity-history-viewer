@@ -1,4 +1,4 @@
-import type { Address } from 'viem';
+import type { Address, PublicClient } from 'viem';
 import type { ProtocolName } from '../protocols/protocols.js';
 import type {
 	borrowerOperationEnum,
@@ -7,21 +7,17 @@ import type {
 import { getGlobalState, type GlobalState } from './global.js';
 import { getUserState, type UserState } from './user.js';
 import { createClient } from '../protocols/client.js';
-import { maxUint256 } from 'viem';
-
-type DerivedFrom = 'event' | 'liquidation' | 'redemption';
+import { isAfter, isSameTxn, isBefore } from '../utils/helpers.js';
+import { getAbiItem } from '../protocols/modify.js';
+import { protocols } from '../protocols/protocols.js';
 
 export type Timeline = {
-	// Affected by user actions, redemptions, liquidation of user, liquidation
-	// of other troves when stability pool is empty.
-	// Redemptions reduce debt and coll at equal value, and if
 	trove: {
 		coll: bigint;
 		debt: bigint;
 		stake: bigint;
-		feesPaid: bigint;
-		accumulatedFees: bigint;
-		accumulatedFeesRepaid: bigint;
+		collPending: bigint;
+		debtPending: bigint;
 		operation:
 			| (typeof borrowerOperationEnum)[number]
 			| (typeof troveManagerOperationEnum)[number]
@@ -29,41 +25,40 @@ export type Timeline = {
 		blockNumber: bigint;
 		transactionIndex: number;
 		timestamp: bigint;
-		derivedFrom: DerivedFrom;
 	}[];
-	// Affected by user actions, liquidations when stability pool is not empty,
-	// and recieves LQTY emissions on a regulat schedule
-	// NOTE: Distributed ETH coll is 99.5% of collateral
 	stabilityPool: {
 		deposit: bigint;
-		pendingETHGain: bigint;
-		pendingLQTYGain: bigint;
-		pendingLUSDLoss: bigint;
-		appliedETHGain: bigint;
-		appliedLQTYGain: bigint;
-		appliedLUSDLoss: bigint;
-		accumulatedETHGain: bigint;
-		accumulatedLQTYGain: bigint;
-		accumulatedLUSDLoss: bigint;
+		pendingEthGain: bigint;
+		pendingDepositLoss: bigint;
+		pendingLqtyReward: bigint;
+		operation:
+			| 'UserAction'
+			| '3rdPartyUserAction'
+			| '3rdPartyLiquidationWithStabilityPoolOffset';
 		blockNumber: bigint;
 		transactionIndex: number;
 		timestamp: bigint;
-		derivedFrom: DerivedFrom;
 	}[];
-	// Affected by user actions, and rewards are given from redemption fees,
-	// and LUSD issuance fees while not in recovery mode
 	lqtyStakingPool: {
 		stake: bigint;
-		pendingETHGain: bigint;
-		pendingLUSDGain: bigint;
-		appliedETHGain: bigint;
-		appliedLUSDGain: bigint;
-		accumulatedETHGain: bigint;
-		accumulatedLUSDGain: bigint;
+		pendingEthGain: bigint;
+		pendingLusdGain: bigint;
+		operation:
+			| 'UserAction'
+			| '3rdPartyRedemptionFeePaid'
+			| '3rdPartyDepositFeePaid';
 		blockNumber: bigint;
 		transactionIndex: number;
 		timestamp: bigint;
-		derivedFrom: DerivedFrom;
+	}[];
+	collateralSurplusPool: {
+		surplus: bigint;
+		operation:
+			| 'CollClaimed'
+			| 'TroveRedeemedToCloseOrLiquidatedInRecoveryMode';
+		blockNumber: bigint;
+		transactionIndex: number;
+		timestamp: bigint;
 	}[];
 };
 
@@ -78,34 +73,30 @@ export async function constructTimeline(
 
 	const timeline: Timeline = {
 		trove: [
-			...userState.troveUpdatedBorrowerOperations.map((e) => {
+			...userState.troveBorrowerOperations.map((e) => {
 				return {
 					coll: e.coll,
 					debt: e.debt,
 					stake: e.stake,
-					feesPaid: 0n,
-					accumulatedFees: 0n,
-					accumulatedFeesRepaid: 0n,
+					collPending: 0n,
+					debtPending: 0n,
 					operation: e.operation,
 					blockNumber: e.blockNumber,
 					transactionIndex: e.transactionIndex,
-					timestamp: e.timestamp,
-					derivedFrom: e.derivedFrom
+					timestamp: e.timestamp
 				};
 			}),
-			...userState.troveUpdatedTroveManager.map((e) => {
+			...userState.troveTroveManager.map((e) => {
 				return {
 					coll: e.coll,
 					debt: e.debt,
 					stake: e.stake,
-					feesPaid: 0n,
-					accumulatedFees: 0n,
-					accumulatedFeesRepaid: 0n,
+					collPending: 0n,
+					debtPending: 0n,
 					operation: e.operation,
 					blockNumber: e.blockNumber,
 					transactionIndex: e.transactionIndex,
-					timestamp: e.timestamp,
-					derivedFrom: e.derivedFrom
+					timestamp: e.timestamp
 				};
 			})
 		].sort((a, b) => {
@@ -115,296 +106,542 @@ export async function constructTimeline(
 			return Number(a.blockNumber - b.blockNumber);
 		}),
 		stabilityPool: [
-			...userState.userDepositChanged.map((e) => {
+			...userState.depositedLusd.map((e) => {
 				return {
-					deposit: e.balance,
-					pendingETHGain: 0n,
-					pendingLQTYGain: 0n,
-					pendingLUSDLoss: 0n,
-					appliedETHGain: 0n,
-					appliedLQTYGain: 0n,
-					appliedLUSDLoss: 0n,
-					accumulatedETHGain: 0n,
-					accumulatedLQTYGain: 0n,
-					accumulatedLUSDLoss: 0n,
+					deposit: e.deposit,
+					pendingEthGain: 0n,
+					pendingDepositLoss: 0n,
+					pendingLqtyReward: 0n,
+					operation: 'UserAction' as const,
 					blockNumber: e.blockNumber,
 					transactionIndex: e.transactionIndex,
-					timestamp: e.timestamp,
-					derivedFrom: e.derivedFrom
+					timestamp: e.timestamp
 				};
 			})
 		],
 		lqtyStakingPool: [
-			...userState.stakeChanged.map((e) => {
+			...userState.stakedLqty.map((e) => {
 				return {
-					stake: e.balance,
-					pendingETHGain: 0n,
-					pendingLUSDGain: 0n,
-					appliedETHGain: 0n,
-					appliedLUSDGain: 0n,
-					accumulatedETHGain: 0n,
-					accumulatedLUSDGain: 0n,
+					stake: e.stake,
+					pendingEthGain: 0n,
+					pendingLusdGain: 0n,
+					operation: 'UserAction' as const,
 					blockNumber: e.blockNumber,
 					transactionIndex: e.transactionIndex,
-					timestamp: e.timestamp,
-					derivedFrom: e.derivedFrom
+					timestamp: e.timestamp
+				};
+			})
+		],
+		collateralSurplusPool: [
+			...userState.collBalance.map((e) => {
+				return {
+					surplus: e.surplus,
+					operation:
+						e.surplus === 0n
+							? ('CollClaimed' as const)
+							: ('TroveRedeemedToCloseOrLiquidatedInRecoveryMode' as const),
+					blockNumber: e.blockNumber,
+					transactionIndex: e.transactionIndex,
+					timestamp: e.timestamp
 				};
 			})
 		]
 	};
 
-	let cachedTotalLusdIndex = 0;
-	let cachedTotalStakesIndex = 0;
-	let cachedTotalCollIndex = 0;
-	let cachedTotalDebtIndex = 0;
-	let cachedPriceIndex = 0;
+	spliceTroveEventsFromLTerms(timeline, globalState);
+	await spliceStabilityPoolEventsFromPSAndG(
+		timeline,
+		globalState,
+		userState,
+		client,
+		protocol
+	);
+	spliceLqtyStakingPoolEventsFromFTerms(timeline, globalState, userState);
 
-	let cachedUserTroveIndex = 0;
-	let cachedUserDepositIndex = 0;
+	return timeline;
+}
 
-	for (const liquidation of globalState.liquidations) {
-		if (liquidation.borrower === userAddress) continue;
+function spliceTroveEventsFromLTerms(
+	timeline: Timeline,
+	globalState: GlobalState
+) {
+	let cachedTroveIndex = 0;
+	let cachedLTermsIndex = 0;
+	let cachedTroveUpdate = timeline.trove[0]!;
 
-		const { event: spBefore, index: totalLusdIndex } =
-			getEventForLiquidation(
-				liquidation,
-				globalState.totalDepositedLUSD,
-				cachedTotalLusdIndex,
-				true
-			);
-		cachedTotalLusdIndex = totalLusdIndex;
+	// L Terms get updated on liquidations
+	for (const lAtLiq of globalState.globalLTerms) {
+		if (isBefore(lAtLiq, timeline.trove[0]!)) continue;
 
-		const { event: stakesBefore, index: totalStakesIndex } =
-			getEventForLiquidation(
-				liquidation,
-				globalState.totalStakes,
-				cachedTotalStakesIndex,
-				true
-			);
-		cachedTotalStakesIndex = totalStakesIndex;
+		let { event: lastTroveUpdate, index: lastTroveIndex } = getEventBefore({
+			blockNumber: lAtLiq.blockNumber,
+			transactionIndex: lAtLiq.transactionIndex,
+			stateArray: timeline.trove,
+			startIndex: cachedTroveIndex,
+			takeEventInSameTxnIndex: false
+		});
+		cachedTroveIndex = lastTroveIndex;
 
-		const { event: totalCollBefore, index: totalCollIndex } =
-			getEventForLiquidation(
-				liquidation,
-				globalState.totalColl,
-				cachedTotalCollIndex,
-				true
-			);
-		cachedTotalCollIndex = totalCollIndex;
+		// If last trove update was spliced in from the another liquidation,
+		// use the cached trove update, then set cached to the last trove update
+		lastTroveUpdate =
+			lastTroveUpdate!.operation ===
+			'3rdPartyLiquidationWithEmptyStabilityPool'
+				? cachedTroveUpdate
+				: lastTroveUpdate;
+		cachedTroveUpdate = lastTroveUpdate!;
 
-		const { event: totalDebtBefore, index: totalDebtIndex } =
-			getEventForLiquidation(
-				liquidation,
-				globalState.totalDebt,
-				cachedTotalDebtIndex,
-				true
-			);
-		cachedTotalDebtIndex = totalDebtIndex;
+		if (lastTroveUpdate!.coll === 0n) continue;
 
-		const { event: priceBefore, index: priceIndex } =
-			getEventForLiquidation(
-				liquidation,
-				globalState.prices,
-				cachedPriceIndex,
-				true
-			);
-		cachedPriceIndex = priceIndex;
+		/**
+		 * Coll & Debt Gain
+		 */
+		const { event: lastTroveLTerms, index: lastTroveLTermsIndex } =
+			getEventBefore({
+				blockNumber: lAtLiq.blockNumber,
+				transactionIndex: lAtLiq.transactionIndex,
+				stateArray: timeline.trove,
+				startIndex: cachedLTermsIndex,
+				takeEventInSameTxnIndex: false
+			});
+		cachedLTermsIndex = lastTroveLTermsIndex;
 
-		const { event: troveBefore, index: userTroveIndex } =
-			getEventForLiquidation(
-				liquidation,
-				timeline.trove,
-				cachedUserTroveIndex,
-				true
-			);
-		cachedUserTroveIndex = userTroveIndex;
+		const ethRewardPerUnitStaked = lAtLiq.lEth - lastTroveLTerms!.coll;
+		const pendingEthReward =
+			(lastTroveUpdate!.stake * ethRewardPerUnitStaked) /
+			globalState.DECIMAL_PRECISION;
 
-		const { event: depositBefore, index: userDepositIndex } =
-			getEventForLiquidation(
-				liquidation,
-				userState.userDepositChanged,
-				cachedUserDepositIndex,
-				true
-			);
-		cachedUserDepositIndex = userDepositIndex;
+		const lusdRewardPerUnitStaked = lAtLiq.lLusd - lastTroveLTerms!.debt;
+		const pendingLusdReward =
+			(lastTroveUpdate!.stake * lusdRewardPerUnitStaked) /
+			globalState.DECIMAL_PRECISION;
 
-		if (
-			(!troveBefore || troveBefore.coll === 0n) &&
-			(!depositBefore || depositBefore.balance === 0n)
-		) {
-			continue;
-		}
-
-		const totalLusdBefore = spBefore?.balance ?? 0n;
-		const totalStakesBefore = stakesBefore?.amount ?? 0n;
-		const userDepositBefore = depositBefore?.balance ?? 0n;
-		const price = priceBefore?.price ?? 0n;
-		const totalColl = totalCollBefore?.balance ?? 0n;
-		const totalDebt = totalDebtBefore?.balance ?? 0n;
-
-		// Calculate offset vs redistributed
-		let {
-			debtToOffset,
-			collToSendToSP,
-			debtToRedistribute,
-			collToRedistribute
-		}: {
-			debtToOffset: bigint;
-			collToSendToSP: bigint;
-			debtToRedistribute: bigint;
-			collToRedistribute: bigint;
-		} = {
-			debtToOffset: 0n,
-			collToSendToSP: 0n,
-			debtToRedistribute: 0n,
-			collToRedistribute: 0n
-		};
-
-		if (liquidation.operation === 'liquidateInNormalMode') {
-			const collGasCompensation =
-				liquidation.coll / globalState.PERCENT_DIVISOR;
-			const collToLiquidate = liquidation.coll - collGasCompensation;
-
-			const {
-				debtToOffset: normalDebtToOffset,
-				collToSendToSP: normalCollToSendToSP,
-				debtToRedistribute: normalDebtToRedistribute,
-				collToRedistribute: normalCollToRedistribute
-			} = getOffsetAndRedistributionVals(
-				liquidation.debt,
-				collToLiquidate,
-				totalLusdBefore
-			);
-
-			debtToOffset = normalDebtToOffset;
-			collToSendToSP = normalCollToSendToSP;
-			debtToRedistribute = normalDebtToRedistribute;
-			collToRedistribute = normalCollToRedistribute;
-		} else {
-			const eventICR = computeCR(
-				liquidation.coll,
-				liquidation.debt,
-				price
-			);
-			const TCR = computeCR(totalColl, totalDebt, price);
-
-			if (eventICR <= globalState._100pct) {
-				const collGasCompensation =
-					liquidation.coll / globalState.PERCENT_DIVISOR;
-				const collToLiquidate = liquidation.coll - collGasCompensation;
-
-				debtToOffset = 0n;
-				collToSendToSP = 0n;
-				debtToRedistribute = liquidation.debt;
-				collToRedistribute = collToLiquidate;
-			} else if (
-				eventICR > globalState._100pct &&
-				eventICR <= globalState.MCR
-			) {
-				const collGasCompensation =
-					liquidation.coll / globalState.PERCENT_DIVISOR;
-				const collToLiquidate = liquidation.coll - collGasCompensation;
-
-				const {
-					debtToOffset: recoveryDebtToOffset,
-					collToSendToSP: recoveryCollToSendToSP,
-					debtToRedistribute: recoveryDebtToRedistribute,
-					collToRedistribute: recoveryCollToRedistribute
-				} = getOffsetAndRedistributionVals(
-					liquidation.debt,
-					collToLiquidate,
-					totalLusdBefore
-				);
-
-				debtToOffset = recoveryDebtToOffset;
-				collToSendToSP = recoveryCollToSendToSP;
-				debtToRedistribute = recoveryDebtToRedistribute;
-				collToRedistribute = recoveryCollToRedistribute;
-			} else if (
-				eventICR >= globalState.MCR &&
-				eventICR < TCR &&
-				liquidation.debt <= totalLusdBefore
-			) {
-				const {
-					debtToOffset: cappedDebtToOffset,
-					collToSendToSP: cappedCollToSendToSP,
-					debtToRedistribute: cappedDebtToRedistribute,
-					collToRedistribute: cappedCollToRedistribute
-				} = getCappedOffsetVals(
-					liquidation.debt,
-					liquidation.coll,
-					price,
-					globalState.MCR,
-					globalState.PERCENT_DIVISOR
-				);
-
-				debtToOffset = cappedDebtToOffset;
-				collToSendToSP = cappedCollToSendToSP;
-				debtToRedistribute = cappedDebtToRedistribute;
-				collToRedistribute = cappedCollToRedistribute;
-			} else {
-				// if (eventICR >= globalState.MCR && eventICR >= globalState.TCR || liquidation.debt > totalLusdBefore)
-				debtToOffset = 0n;
-				collToSendToSP = 0n;
-				debtToRedistribute = 0n;
-				collToRedistribute = 0n;
-			}
-		}
-
-		if (debtToOffset > 0n) {
-		}
-
-		if (debtToRedistribute > 0n) {
+		if (pendingEthReward > timeline.trove[lastTroveIndex]!.collPending) {
+			timeline.trove.splice(lastTroveIndex + 1, 0, {
+				coll: lastTroveUpdate!.coll,
+				debt: lastTroveUpdate!.debt,
+				stake: lastTroveUpdate!.stake,
+				collPending: pendingEthReward,
+				debtPending: pendingLusdReward,
+				operation: '3rdPartyLiquidationWithEmptyStabilityPool',
+				blockNumber: lAtLiq.blockNumber,
+				transactionIndex: lAtLiq.transactionIndex,
+				timestamp: lAtLiq.timestamp
+			});
 		}
 	}
 }
 
-function getEventForLiquidation<
+async function spliceStabilityPoolEventsFromPSAndG(
+	timeline: Timeline,
+	globalState: GlobalState,
+	userState: UserState,
+	client: PublicClient,
+	protocol: ProtocolName
+) {
+	let cachedDepositIndex = 0;
+	let cachedDeposit = timeline.stabilityPool[0]!;
+	let cachedSnapshotIndex = 0;
+	let cachedSnapshotScaleIndex = 0;
+	let cachedFrontEndTagIndex = 0;
+	let cachedPIndex = 0;
+	let cachedSIndex = 0;
+	let cachedScaleIndex = 0;
+	let cachedEpochIndex = 0;
+
+	for (const G of globalState.globalG) {
+		if (isBefore(G, timeline.stabilityPool[0]!)) continue;
+
+		let { event: lastDeposit, index: lastDepositIndex } = getEventBefore({
+			blockNumber: G.blockNumber,
+			transactionIndex: G.transactionIndex,
+			stateArray: timeline.stabilityPool,
+			startIndex: cachedDepositIndex,
+			takeEventInSameTxnIndex: false
+		});
+		cachedDepositIndex = lastDepositIndex;
+
+		// If last deposit update was spliced in from the another deposit,
+		// use the cached deposit update, then set cached to the last deposit update
+		lastDeposit =
+			lastDeposit!.operation !== 'UserAction'
+				? cachedDeposit
+				: lastDeposit;
+		cachedDeposit = lastDeposit!;
+
+		if (lastDeposit!.deposit === 0n) continue;
+
+		const { event: depositorSnapshot, index: depositorSnapshotIndex } =
+			getEventBefore({
+				blockNumber: G.blockNumber,
+				transactionIndex: G.transactionIndex,
+				stateArray: userState.depositorSnapshots,
+				startIndex: cachedSnapshotIndex,
+				takeEventInSameTxnIndex: false
+			});
+		cachedSnapshotIndex = depositorSnapshotIndex;
+
+		const {
+			event: depositorSnapshotScale,
+			index: depositorSnapshotScaleIndex
+		} = getEventBefore({
+			blockNumber: depositorSnapshot!.blockNumber,
+			transactionIndex: depositorSnapshot!.transactionIndex,
+			stateArray: globalState.globalScale,
+			startIndex: cachedSnapshotScaleIndex,
+			takeEventInSameTxnIndex: false
+		});
+		cachedSnapshotScaleIndex = depositorSnapshotScaleIndex;
+
+		const { event: frontEndTag, index: frontEndTagIndex } = getEventBefore({
+			blockNumber: G.blockNumber,
+			transactionIndex: G.transactionIndex,
+			stateArray: userState.frontEndTag,
+			startIndex: cachedFrontEndTagIndex,
+			takeEventInSameTxnIndex: false
+		});
+		cachedFrontEndTagIndex = frontEndTagIndex;
+
+		const { event: lastP, index: lastPIndex } = getEventBefore({
+			blockNumber: G.blockNumber,
+			transactionIndex: G.transactionIndex,
+			stateArray: globalState.globalP,
+			startIndex: cachedPIndex,
+			takeEventInSameTxnIndex: true
+		});
+		cachedPIndex = lastPIndex;
+
+		const { event: lastS, index: lastSIndex } = getEventBefore({
+			blockNumber: G.blockNumber,
+			transactionIndex: G.transactionIndex,
+			stateArray: globalState.globalS,
+			startIndex: cachedSIndex,
+			takeEventInSameTxnIndex: true
+		});
+		cachedSIndex = lastSIndex;
+
+		const { event: lastScale, index: lastScaleIndex } = getEventBefore({
+			blockNumber: G.blockNumber,
+			transactionIndex: G.transactionIndex,
+			stateArray: globalState.globalScale,
+			startIndex: cachedScaleIndex,
+			takeEventInSameTxnIndex: false
+		});
+		cachedScaleIndex = lastScaleIndex;
+
+		const { event: lastEpoch, index: lastEpochIndex } = getEventBefore({
+			blockNumber: G.blockNumber,
+			transactionIndex: G.transactionIndex,
+			stateArray: globalState.globalEpoch,
+			startIndex: cachedEpochIndex,
+			takeEventInSameTxnIndex: false
+		});
+		cachedEpochIndex = lastEpochIndex;
+
+		let lqtyReward = lastDeposit!.pendingLqtyReward;
+		let ethGain = lastDeposit!.pendingEthGain;
+		let lusdLoss = lastDeposit!.pendingDepositLoss;
+
+		/**
+		 * LQTY Reward
+		 */
+		let firstPortionG = 0n;
+		let secondPortionG = 0n;
+
+		if (
+			// If a scale change happened between the last deposit and the event
+			isAfter(lastScale!, lastDeposit!) &&
+			(isSameTxn(lastScale!, G) || isBefore(lastScale!, G))
+		) {
+			const finalGAtDepositScale = await client.readContract({
+				address: protocols[protocol].stabilityPool,
+				abi: [getAbiItem(protocol, 'stabilityPool', 'epochToScaleToG')],
+				functionName: 'epochToScaleToG',
+				args: [lastEpoch!.epoch, lastScale!.scale]
+			});
+
+			firstPortionG = finalGAtDepositScale - depositorSnapshot!.G;
+			secondPortionG = G!.G / globalState.SCALE_FACTOR;
+		} else {
+			firstPortionG = G!.G - depositorSnapshot!.G;
+			// secondPortionG stays 0n
+		}
+
+		const fullLqtyReward =
+			(lastDeposit!.deposit * (firstPortionG + secondPortionG)) /
+			(depositorSnapshot!.P / globalState.DECIMAL_PRECISION);
+
+		const kickbackRate = globalState.frontEnds.find(
+			(e) => e.frontEnd === frontEndTag!.frontEndTag
+		)!.kickbackRate;
+
+		lqtyReward =
+			(kickbackRate * fullLqtyReward) / globalState.DECIMAL_PRECISION;
+
+		// P and S always update with G, but not all G updates have a P and S
+		// updates
+		if (isSameTxn(lastP!, G)) {
+			/**
+			 * ETH Gain
+			 */
+			let firstPortionS = 0n;
+			let secondPortionS = 0n;
+
+			if (
+				// If a scale change happened between the last deposit and the liq
+				isAfter(lastScale!, lastDeposit!) &&
+				(isSameTxn(lastScale!, G) || isBefore(lastScale!, G))
+			) {
+				const finalSumAtDepositScale = await client.readContract({
+					address: protocols[protocol].stabilityPool,
+					abi: [
+						getAbiItem(
+							protocol,
+							'stabilityPool',
+							'epochToScaleToSum'
+						)
+					],
+					functionName: 'epochToScaleToSum',
+					args: [lastEpoch!.epoch, lastScale!.scale]
+				});
+
+				firstPortionS = finalSumAtDepositScale - depositorSnapshot!.S;
+				secondPortionS = lastS!.S / globalState.SCALE_FACTOR;
+			} else {
+				firstPortionS = lastS!.S - depositorSnapshot!.S;
+				// secondPortion stays 0n
+			}
+
+			ethGain =
+				(lastDeposit!.deposit * (firstPortionS + secondPortionS)) /
+				(depositorSnapshot!.P / globalState.DECIMAL_PRECISION);
+
+			/**
+			 * LUSD Loss
+			 */
+			const scaleDiff = lastScale!.scale - depositorSnapshotScale!.scale;
+			let compoundedStake = 0n;
+
+			if (scaleDiff === 0n) {
+				compoundedStake = lastDeposit!.deposit;
+			} else if (scaleDiff === 1n) {
+				compoundedStake =
+					(lastDeposit!.deposit * depositorSnapshot!.P) /
+					depositorSnapshot!.P /
+					globalState.SCALE_FACTOR;
+			} else {
+				// if scaleDiff >= 2
+				compoundedStake = 0n;
+			}
+
+			if (compoundedStake < lastDeposit!.deposit) compoundedStake = 0n;
+
+			lusdLoss = lastDeposit!.deposit - compoundedStake;
+
+			if (
+				ethGain >
+				timeline.stabilityPool[lastDepositIndex]!.pendingEthGain
+			) {
+				timeline.stabilityPool.splice(lastDepositIndex + 1, 0, {
+					deposit: lastDeposit!.deposit,
+					pendingEthGain: ethGain,
+					pendingDepositLoss: lusdLoss,
+					pendingLqtyReward: lqtyReward,
+					operation:
+						'3rdPartyLiquidationWithStabilityPoolOffset' as const,
+					blockNumber: G.blockNumber,
+					transactionIndex: G.transactionIndex,
+					timestamp: G.timestamp
+				});
+			}
+		} else {
+			if (
+				lqtyReward >
+				timeline.stabilityPool[lastDepositIndex]!.pendingLqtyReward
+			) {
+				timeline.stabilityPool.splice(lastDepositIndex + 1, 0, {
+					deposit: lastDeposit!.deposit,
+					pendingEthGain: 0n,
+					pendingDepositLoss: lusdLoss,
+					pendingLqtyReward: lqtyReward,
+					operation: '3rdPartyUserAction' as const,
+					blockNumber: G.blockNumber,
+					transactionIndex: G.transactionIndex,
+					timestamp: G.timestamp
+				});
+			}
+		}
+	}
+}
+
+function spliceLqtyStakingPoolEventsFromFTerms(
+	timeline: Timeline,
+	globalState: GlobalState,
+	userState: UserState
+) {
+	let cachedStakeIndex = 0;
+	let cachedStake = timeline.lqtyStakingPool[0]!;
+	let cachedStakerSnapshotIndex = 0;
+
+	const refStakeTimeline = [...timeline.lqtyStakingPool];
+
+	for (const fEth of globalState.globalFEth) {
+		if (isBefore(fEth, timeline.lqtyStakingPool[0]!)) continue;
+
+		let { event: lastStake, index: lastStakeIndex } = getEventBefore({
+			blockNumber: fEth.blockNumber,
+			transactionIndex: fEth.transactionIndex,
+			stateArray: refStakeTimeline,
+			startIndex: cachedStakeIndex,
+			takeEventInSameTxnIndex: false
+		});
+		cachedStakeIndex = lastStakeIndex;
+
+		// If last stake update was spliced in from the another stake,
+		// use the cached stake update, then set cached to the last stake update
+		lastStake =
+			lastStake!.operation !== 'UserAction' ? cachedStake : lastStake;
+		cachedStake = lastStake!;
+
+		if (lastStake!.stake === 0n) continue;
+
+		const { event: lastStakerSnapshot, index: lastStakerSnapshotIndex } =
+			getEventBefore({
+				blockNumber: fEth.blockNumber,
+				transactionIndex: fEth.transactionIndex,
+				stateArray: userState.stakerSnapshots,
+				startIndex: cachedStakerSnapshotIndex,
+				takeEventInSameTxnIndex: false
+			});
+		cachedStakerSnapshotIndex = lastStakerSnapshotIndex;
+
+		/**
+		 * Eth Gain
+		 */
+		const ethGain =
+			(lastStake!.stake * (fEth.fEth - lastStakerSnapshot!.fEth)) /
+			globalState.DECIMAL_PRECISION;
+
+		timeline.lqtyStakingPool.splice(lastStakeIndex + 1, 0, {
+			stake: lastStake!.stake,
+			pendingEthGain: ethGain,
+			pendingLusdGain: 0n,
+			operation: '3rdPartyRedemptionFeePaid' as const,
+			blockNumber: fEth.blockNumber,
+			transactionIndex: fEth.transactionIndex,
+			timestamp: fEth.timestamp
+		});
+	}
+
+	for (const fLusd of globalState.globalFLusd) {
+		if (isBefore(fLusd, timeline.lqtyStakingPool[0]!)) continue;
+
+		let { event: lastStake, index: lastStakeIndex } = getEventBefore({
+			blockNumber: fLusd.blockNumber,
+			transactionIndex: fLusd.transactionIndex,
+			stateArray: refStakeTimeline,
+			startIndex: cachedStakeIndex,
+			takeEventInSameTxnIndex: false
+		});
+		cachedStakeIndex = lastStakeIndex;
+
+		// If last stake update was spliced in from the another stake,
+		// use the cached stake update, then set cached to the last stake update
+		lastStake =
+			lastStake!.operation !== 'UserAction' ? cachedStake : lastStake;
+		cachedStake = lastStake!;
+
+		if (lastStake!.stake === 0n) continue;
+
+		const { event: lastStakerSnapshot, index: lastStakerSnapshotIndex } =
+			getEventBefore({
+				blockNumber: fLusd.blockNumber,
+				transactionIndex: fLusd.transactionIndex,
+				stateArray: userState.stakerSnapshots,
+				startIndex: cachedStakerSnapshotIndex,
+				takeEventInSameTxnIndex: false
+			});
+		cachedStakerSnapshotIndex = lastStakerSnapshotIndex;
+
+		/**
+		 * Lusd Gain
+		 */
+		const lusdGain =
+			(lastStake!.stake * (fLusd.fLusd - lastStakerSnapshot!.fLusd)) /
+			globalState.DECIMAL_PRECISION;
+
+		timeline.lqtyStakingPool.splice(lastStakeIndex + 1, 0, {
+			stake: lastStake!.stake,
+			pendingEthGain: 0n,
+			pendingLusdGain: lusdGain,
+			operation: '3rdPartyDepositFeePaid' as const,
+			blockNumber: fLusd.blockNumber,
+			transactionIndex: fLusd.transactionIndex,
+			timestamp: fLusd.timestamp
+		});
+	}
+
+	for (let i = 0; i < timeline.lqtyStakingPool.length; i++) {
+		const e = timeline.lqtyStakingPool[i]!;
+
+		if (e.operation === 'UserAction') {
+			continue;
+		} else if (e.operation === '3rdPartyRedemptionFeePaid') {
+			e.pendingLusdGain =
+				timeline.lqtyStakingPool[i - 1]!.pendingLusdGain;
+		} else {
+			// if operation is 3rdPartyDepositFeePaid
+			e.pendingEthGain = timeline.lqtyStakingPool[i - 1]!.pendingEthGain;
+		}
+	}
+}
+
+function getEventBefore<
 	T extends
 		| GlobalState[Exclude<
 				keyof GlobalState,
+				| 'DECIMAL_PRECISION'
 				| 'LUSD_GAS_COMPENSATION'
 				| 'PERCENT_DIVISOR'
 				| '_100pct'
 				| 'MCR'
 				| 'CCR'
+				| 'SCALE_FACTOR'
 		  >]
 		| UserState[keyof UserState]
 		| Timeline[keyof Timeline]
->(
-	liquidationEvent: GlobalState['liquidations'][number],
-	stateArray: T,
-	totalLusdStartIndex: number,
-	takeEventInSameTxnIndex: boolean
-): {
+>({
+	blockNumber,
+	transactionIndex,
+	stateArray,
+	startIndex,
+	takeEventInSameTxnIndex
+}: {
+	blockNumber: bigint;
+	transactionIndex: number;
+	stateArray: T;
+	startIndex: number;
+	takeEventInSameTxnIndex: boolean;
+}): {
 	event: T[number] | undefined;
 	index: number;
 } {
-	let eventBeforeLiquidation: (typeof stateArray)[number] | undefined;
+	let eventBefore: (typeof stateArray)[number] | undefined;
 	let eventInSameTransaction: (typeof stateArray)[number] | undefined;
 	let eventInSameTransactionIndex: number | undefined;
 
-	while (totalLusdStartIndex < stateArray.length) {
-		const t = stateArray[totalLusdStartIndex]!;
+	while (startIndex < stateArray.length) {
+		const t = stateArray[startIndex]!;
 
 		if (takeEventInSameTxnIndex) {
-			const isSameTransaction =
-				t.blockNumber === liquidationEvent.blockNumber &&
-				t.transactionIndex === liquidationEvent.transactionIndex;
-
-			if (isSameTransaction) {
+			if (isSameTxn(t, { blockNumber, transactionIndex })) {
 				eventInSameTransaction = t;
-				eventInSameTransactionIndex = totalLusdStartIndex;
-				totalLusdStartIndex++;
+				eventInSameTransactionIndex = startIndex;
+				startIndex++;
 				continue;
 			}
 
-			const isAfter =
-				t.blockNumber > liquidationEvent.blockNumber ||
-				(t.blockNumber === liquidationEvent.blockNumber &&
-					t.transactionIndex > liquidationEvent.transactionIndex);
-
-			if (isAfter) {
+			if (isAfter(t, { blockNumber, transactionIndex })) {
 				if (
 					eventInSameTransaction !== undefined &&
 					eventInSameTransactionIndex !== undefined
@@ -415,31 +652,26 @@ function getEventForLiquidation<
 					};
 				}
 				return {
-					event: eventBeforeLiquidation,
-					index: eventBeforeLiquidation
-						? totalLusdStartIndex - 1
-						: totalLusdStartIndex
+					event: eventBefore,
+					index: eventBefore ? startIndex - 1 : startIndex
 				};
 			}
 
-			eventBeforeLiquidation = t;
-			totalLusdStartIndex++;
+			eventBefore = t;
+			startIndex++;
 		} else {
-			const isAfterOrEqual =
-				t.blockNumber > liquidationEvent.blockNumber ||
-				(t.blockNumber === liquidationEvent.blockNumber &&
-					t.transactionIndex >= liquidationEvent.transactionIndex);
-
-			if (isAfterOrEqual) {
-				if (totalLusdStartIndex > 0) {
-					eventBeforeLiquidation =
-						stateArray[totalLusdStartIndex - 1];
+			if (
+				isAfter(t, { blockNumber, transactionIndex }) ||
+				isSameTxn(t, { blockNumber, transactionIndex })
+			) {
+				if (startIndex > 0) {
+					eventBefore = stateArray[startIndex - 1];
 				}
 				break;
 			}
 
-			eventBeforeLiquidation = t;
-			totalLusdStartIndex++;
+			eventBefore = t;
+			startIndex++;
 		}
 	}
 
@@ -455,69 +687,7 @@ function getEventForLiquidation<
 	}
 
 	return {
-		event: eventBeforeLiquidation,
-		index: eventBeforeLiquidation
-			? totalLusdStartIndex - 1
-			: totalLusdStartIndex
-	};
-}
-
-function computeCR(coll: bigint, debt: bigint, price: bigint) {
-	if (debt > 0) {
-		const newCollRatio = (coll * price) / debt;
-
-		return newCollRatio;
-	} else {
-		return maxUint256;
-	}
-}
-
-function getOffsetAndRedistributionVals(
-	debt: bigint,
-	coll: bigint,
-	LUSDInSP: bigint
-) {
-	if (LUSDInSP > 0n) {
-		const debtToOffset = debt - LUSDInSP < 0n ? debt : LUSDInSP;
-		const collToSendToSP = (coll * debtToOffset) / debt;
-		const debtToRedistribute = debt - debtToOffset;
-		const collToRedistribute = coll - collToSendToSP;
-
-		return {
-			debtToOffset,
-			collToSendToSP,
-			debtToRedistribute,
-			collToRedistribute
-		};
-	} else {
-		return {
-			debtToOffset: 0n,
-			collToSendToSP: 0n,
-			debtToRedistribute: debt,
-			collToRedistribute: coll
-		};
-	}
-}
-
-function getCappedOffsetVals(
-	entireDebt: bigint,
-	entireColl: bigint,
-	price: bigint,
-	MCR: bigint,
-	PERCENT_DIVISOR: bigint
-) {
-	const cappedCollPortion = (entireDebt * MCR) / price;
-	const collGasCompensation = cappedCollPortion / PERCENT_DIVISOR;
-
-	const debtToOffset = entireDebt;
-	const collToSendToSP = cappedCollPortion - collGasCompensation;
-	const debtToRedistribute = 0n;
-	const collToRedistribute = 0n;
-
-	return {
-		debtToOffset,
-		collToSendToSP,
-		debtToRedistribute,
-		collToRedistribute
+		event: eventBefore,
+		index: eventBefore ? startIndex - 1 : startIndex
 	};
 }
