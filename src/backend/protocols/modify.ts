@@ -18,7 +18,6 @@ import {
 	collSurplusPoolAbi,
 	defaultPoolAbi,
 	gasPoolAbi,
-	iErc20Abi,
 	lqtyStakingAbi,
 	lqtyTokenAbi,
 	lusdTokenAbi,
@@ -144,13 +143,14 @@ export function modifyAbi<A extends LiquityAbi, M extends Modifiers>(
 	}) as ModifyAbi<A, M>;
 }
 
-type AllAbiItemNames<A extends LiquityAbi> = A extends readonly (infer item)[]
-	? item extends { name: infer N }
-		? N extends string
-			? N
+export type AllAbiItemNames<A extends LiquityAbi> =
+	A extends readonly (infer item)[]
+		? item extends { name: infer N }
+			? N extends string
+				? N
+				: never
 			: never
-		: never
-	: never;
+		: never;
 
 // prettier-ignore
 type FindAbiItemByContractAndName<
@@ -198,7 +198,6 @@ function getModifiedAbis<P extends ProtocolName>(
 		(typeof protocols)[P]['modifiers']
 	>;
 	gasPool: ModifyAbi<typeof gasPoolAbi, (typeof protocols)[P]['modifiers']>;
-	iErc20: ModifyAbi<typeof iErc20Abi, (typeof protocols)[P]['modifiers']>;
 	lqtyStaking: ModifyAbi<
 		typeof lqtyStakingAbi,
 		(typeof protocols)[P]['modifiers']
@@ -243,7 +242,6 @@ function getModifiedAbis<P extends ProtocolName>(
 		),
 		defaultPool: modifyAbi(defaultPoolAbi, modifiers as SpecificModifiers),
 		gasPool: modifyAbi(gasPoolAbi, modifiers as SpecificModifiers),
-		iErc20: modifyAbi(iErc20Abi, modifiers as SpecificModifiers),
 		lqtyStaking: modifyAbi(lqtyStakingAbi, modifiers as SpecificModifiers),
 		lqtyToken: modifyAbi(lqtyTokenAbi, modifiers as SpecificModifiers),
 		lusdToken: modifyAbi(lusdTokenAbi, modifiers as SpecificModifiers),

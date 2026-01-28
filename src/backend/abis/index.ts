@@ -3,7 +3,6 @@ import { borrowerOperationsAbi } from './borrowerOperations';
 import { collSurplusPoolAbi } from './collSurplusPool';
 import { defaultPoolAbi } from './defaultPool';
 import { gasPoolAbi } from './gasPool';
-import { iErc20Abi } from './iErc20';
 import { lqtyStakingAbi } from './lqtyStaking';
 import { lqtyTokenAbi } from './lqtyToken';
 import { lusdTokenAbi } from './lusdToken';
@@ -18,7 +17,6 @@ export {
 	collSurplusPoolAbi,
 	defaultPoolAbi,
 	gasPoolAbi,
-	iErc20Abi,
 	lqtyStakingAbi,
 	lqtyTokenAbi,
 	lusdTokenAbi,
@@ -34,7 +32,6 @@ export type LiquityContractName =
 	| 'collSurplusPool'
 	| 'defaultPool'
 	| 'gasPool'
-	| 'iErc20'
 	| 'lqtyStaking'
 	| 'lqtyToken'
 	| 'lusdToken'
@@ -48,7 +45,6 @@ export type LiquityAbi =
 	| typeof collSurplusPoolAbi
 	| typeof defaultPoolAbi
 	| typeof gasPoolAbi
-	| typeof iErc20Abi
 	| typeof lqtyStakingAbi
 	| typeof lqtyTokenAbi
 	| typeof lusdTokenAbi
@@ -62,7 +58,6 @@ export type LiquityAbiMap = {
 	collSurplusPool: typeof collSurplusPoolAbi;
 	defaultPool: typeof defaultPoolAbi;
 	gasPool: typeof gasPoolAbi;
-	iErc20: typeof iErc20Abi;
 	lqtyStaking: typeof lqtyStakingAbi;
 	lqtyToken: typeof lqtyTokenAbi;
 	lusdToken: typeof lusdTokenAbi;

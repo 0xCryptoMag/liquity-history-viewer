@@ -1,14 +1,21 @@
 import type { Address, PublicClient } from 'viem';
-import type { ProtocolName } from '../protocols/protocols';
-import type { ReplaceBrandedWordsInStringForAllProtocols } from '../protocols/rebrand';
-import type { ExtractUnionValue } from '../utils/helpers';
-import { troveManagerOperationEnum } from '../protocols/enums';
-import { replaceBrandedWordsInString } from '../protocols/rebrand';
-import { getAbiItem } from '../protocols/modify';
-import { protocols } from '../protocols/protocols';
-import { getCachedState, setCachedState, updateCachedState } from './cache';
+import type { ProtocolName } from '../protocols/protocols.js';
+import type { ReplaceBrandedWordsInStringForAllProtocols } from '../protocols/rebrand.js';
+import type { ExtractUnionValue } from '../utils/helpers.js';
+import { replaceBrandedWordsInString } from '../protocols/rebrand.js';
+import { getAbiItem } from '../protocols/modify.js';
+import { protocols } from '../protocols/protocols.js';
+import {
+	getCachedArrayLength,
+	getCachedArrayRange,
+	appendCachedArray,
+	setCachedState,
+	getCachedState
+} from './cache.js';
+import { getContractEventsGenerator } from './events.js';
 
 export type GlobalState = {
+	// Constans
 	DECIMAL_PRECISION: bigint;
 	SCALE_FACTOR: bigint;
 
@@ -79,19 +86,7 @@ export async function getGlobalState(
 	protocol: ProtocolName,
 	client: PublicClient
 ): Promise<GlobalState> {
-	const cachedState = (await getCachedState<
-		Omit<GlobalState, 'DECIMAL_PRECISION' | 'SCALE_FACTOR'>
-	>(protocol, 'globalState')) ?? {
-		frontEnds: [],
-		globalP: [],
-		globalS: [],
-		globalG: [],
-		globalScale: [],
-		globalEpoch: [],
-		globalLTerms: [],
-		globalFEth: [],
-		globalFLusd: []
-	};
+	const { deployBlock } = protocols[protocol];
 
 	// DECIMAL_PRECISION
 	const DECIMAL_PRECISIONAbi = getAbiItem(
@@ -104,6 +99,11 @@ export async function getGlobalState(
 		abi: [DECIMAL_PRECISIONAbi],
 		functionName: 'DECIMAL_PRECISION'
 	});
+	await setCachedState(
+		protocol,
+		['global', 'DECIMAL_PRECISION'],
+		DECIMAL_PRECISION
+	);
 
 	// SCALE_FACTOR
 	const SCALE_FACTORAbi = getAbiItem(
@@ -116,303 +116,454 @@ export async function getGlobalState(
 		abi: [SCALE_FACTORAbi],
 		functionName: 'SCALE_FACTOR'
 	});
+	await setCachedState(protocol, ['global', 'SCALE_FACTOR'], SCALE_FACTOR);
 
 	// frontEnds
-	const frontEndRegisteredAbi = getAbiItem(
-		protocol,
-		'stabilityPool',
-		'FrontEndRegistered'
-	);
-	const frontEndRegistered = await client.getContractEvents({
-		address: protocols[protocol].stabilityPool,
-		abi: [frontEndRegisteredAbi],
-		eventName: frontEndRegisteredAbi.name,
-		// prettier-ignore
-		fromBlock:
-			cachedState.frontEnds.length > 0
-				? cachedState.frontEnds[cachedState.frontEnds.length - 1]!
-					.blockNumber + 1n
-				: protocols[protocol].deployBlock,
-		toBlock: 'latest'
-	});
-	cachedState.frontEnds.push(
-		...frontEndRegistered.map((e) => {
-			return {
-				frontEnd: e.args._frontEnd!,
-				kickbackRate: e.args._kickbackRate!,
-				blockNumber: e.blockNumber,
-				transactionIndex: e.transactionIndex,
-				timestamp: e.blockTimestamp!
-			};
-		})
-	);
+	{
+		const cachedFrontEndsLength = await getCachedArrayLength(protocol, [
+			'global',
+			'frontEnds'
+		]);
+
+		const cachedFrontEnds = await getCachedArrayRange<
+			GlobalState['frontEnds'][number]
+		>(protocol, ['global', 'frontEnds'], cachedFrontEndsLength - 1);
+
+		const frontEnds = getContractEventsGenerator({
+			client,
+			protocol,
+			contract: 'stabilityPool',
+			normalItemName: 'FrontEndRegistered',
+			fromBlock:
+				cachedFrontEnds.length > 0
+					? cachedFrontEnds[0]!.blockNumber + 1n
+					: deployBlock,
+			toBlock: 'latest'
+		});
+
+		for await (const e of frontEnds) {
+			if (e === null) break;
+			if (e instanceof Error) throw e;
+
+			const arr = e.map((i) => {
+				return {
+					frontEnd: i.args._frontEnd!,
+					kickbackRate: i.args._kickbackRate!,
+					blockNumber: i.blockNumber,
+					transactionIndex: i.transactionIndex,
+					timestamp: i.blockTimestamp!
+				};
+			});
+
+			await appendCachedArray(protocol, ['global', 'frontEnds'], arr);
+		}
+	}
 
 	// globalP
-	const pUpdatedAbi = getAbiItem(protocol, 'stabilityPool', 'P_Updated');
-	const pUpdated = await client.getContractEvents({
-		address: protocols[protocol].stabilityPool,
-		abi: [pUpdatedAbi],
-		eventName: pUpdatedAbi.name,
-		// prettier-ignore
-		fromBlock:
-			cachedState.globalP.length > 0
-				? cachedState.globalP[cachedState.globalP.length - 1]!
-					.blockNumber + 1n
-				: protocols[protocol].deployBlock,
-		toBlock: 'latest'
-	});
-	cachedState.globalP.push(
-		...pUpdated.map((e) => {
-			return {
-				P: e.args._P!,
-				blockNumber: e.blockNumber,
-				transactionIndex: e.transactionIndex,
-				timestamp: e.blockTimestamp!
-			};
-		})
-	);
+	{
+		const cachedGlobalPLength = await getCachedArrayLength(protocol, [
+			'global',
+			'globalP'
+		]);
+
+		const cachedGlobalP = await getCachedArrayRange<
+			GlobalState['globalP'][number]
+		>(protocol, ['global', 'globalP'], cachedGlobalPLength - 1);
+
+		const globalP = getContractEventsGenerator({
+			client,
+			protocol,
+			contract: 'stabilityPool',
+			normalItemName: 'P_Updated',
+			fromBlock:
+				cachedGlobalP.length > 0
+					? cachedGlobalP[0]!.blockNumber + 1n
+					: deployBlock,
+			toBlock: 'latest'
+		});
+
+		for await (const e of globalP) {
+			if (e === null) break;
+			if (e instanceof Error) throw e;
+
+			const arr = e.map((i) => {
+				return {
+					P: i.args._P!,
+					blockNumber: i.blockNumber,
+					transactionIndex: i.transactionIndex,
+					timestamp: i.blockTimestamp!
+				};
+			});
+
+			await appendCachedArray(protocol, ['global', 'globalP'], arr);
+		}
+	}
 
 	// globalS
-	const sUpdatedAbi = getAbiItem(protocol, 'stabilityPool', 'S_Updated');
-	const sUpdated = await client.getContractEvents({
-		address: protocols[protocol].stabilityPool,
-		abi: [sUpdatedAbi],
-		eventName: sUpdatedAbi.name,
-		// prettier-ignore
-		fromBlock:
-			cachedState.globalS.length > 0
-				? cachedState.globalS[cachedState.globalS.length - 1]!
-					.blockNumber + 1n
-				: protocols[protocol].deployBlock,
-		toBlock: 'latest'
-	});
-	cachedState.globalS.push(
-		...sUpdated.map((e) => {
-			return {
-				S: e.args._S!,
-				blockNumber: e.blockNumber,
-				transactionIndex: e.transactionIndex,
-				timestamp: e.blockTimestamp!
-			};
-		})
-	);
+	{
+		const cachedGlobalSLength = await getCachedArrayLength(protocol, [
+			'global',
+			'globalS'
+		]);
+
+		const cachedGlobalS = await getCachedArrayRange<
+			GlobalState['globalS'][number]
+		>(protocol, ['global', 'globalS'], cachedGlobalSLength - 1);
+
+		const globalS = getContractEventsGenerator({
+			client,
+			protocol,
+			contract: 'stabilityPool',
+			normalItemName: 'S_Updated',
+			fromBlock:
+				cachedGlobalS.length > 0
+					? cachedGlobalS[0]!.blockNumber + 1n
+					: deployBlock,
+			toBlock: 'latest'
+		});
+
+		for await (const e of globalS) {
+			if (e === null) break;
+			if (e instanceof Error) throw e;
+
+			const arr = e.map((i) => {
+				return {
+					S: i.args._S!,
+					blockNumber: i.blockNumber,
+					transactionIndex: i.transactionIndex,
+					timestamp: i.blockTimestamp!
+				};
+			});
+
+			await appendCachedArray(protocol, ['global', 'globalS'], arr);
+		}
+	}
 
 	// globalG
-	const gUpdatedAbi = getAbiItem(protocol, 'stabilityPool', 'G_Updated');
-	const gUpdated = await client.getContractEvents({
-		address: protocols[protocol].stabilityPool,
-		abi: [gUpdatedAbi],
-		eventName: gUpdatedAbi.name,
-		// prettier-ignore
-		fromBlock:
-			cachedState.globalG.length > 0
-				? cachedState.globalG[cachedState.globalG.length - 1]!
-					.blockNumber + 1n
-				: protocols[protocol].deployBlock,
-		toBlock: 'latest'
-	});
-	cachedState.globalG.push(
-		...gUpdated.map((e) => {
-			return {
-				G: e.args._G!,
-				blockNumber: e.blockNumber,
-				transactionIndex: e.transactionIndex,
-				timestamp: e.blockTimestamp!
-			};
-		})
-	);
+	{
+		const cachedGlobalGLength = await getCachedArrayLength(protocol, [
+			'global',
+			'globalG'
+		]);
+
+		const cachedGlobalG = await getCachedArrayRange<
+			GlobalState['globalG'][number]
+		>(protocol, ['global', 'globalG'], cachedGlobalGLength - 1);
+
+		const globalG = getContractEventsGenerator({
+			client,
+			protocol,
+			contract: 'stabilityPool',
+			normalItemName: 'G_Updated',
+			fromBlock:
+				cachedGlobalG.length > 0
+					? cachedGlobalG[0]!.blockNumber + 1n
+					: deployBlock,
+			toBlock: 'latest',
+			blockChunkSize: 10_000n
+		});
+
+		for await (const e of globalG) {
+			if (e === null) break;
+			if (e instanceof Error) throw e;
+
+			const arr = e.map((i) => {
+				return {
+					G: i.args._G!,
+					blockNumber: i.blockNumber,
+					transactionIndex: i.transactionIndex,
+					timestamp: i.blockTimestamp!
+				};
+			});
+
+			await appendCachedArray(protocol, ['global', 'globalG'], arr);
+		}
+	}
 
 	// globalScale
-	const scaleUpdatedAbi = getAbiItem(
-		protocol,
-		'stabilityPool',
-		'ScaleUpdated'
-	);
-	const scaleUpdated = await client.getContractEvents({
-		address: protocols[protocol].stabilityPool,
-		abi: [scaleUpdatedAbi],
-		eventName: scaleUpdatedAbi.name,
-		// prettier-ignore
-		fromBlock:
-			cachedState.globalScale.length > 0
-				? cachedState.globalScale[cachedState.globalScale.length - 1]!
-					.blockNumber + 1n
-				: protocols[protocol].deployBlock,
-		toBlock: 'latest'
-	});
-	cachedState.globalScale.push(
-		...scaleUpdated.map((e) => {
-			return {
-				scale: e.args._currentScale!,
-				blockNumber: e.blockNumber,
-				transactionIndex: e.transactionIndex,
-				timestamp: e.blockTimestamp!
-			};
-		})
-	);
+	{
+		const cachedGlobalScaleLength = await getCachedArrayLength(protocol, [
+			'global',
+			'globalScale'
+		]);
+
+		const cachedGlobalScale = await getCachedArrayRange<
+			GlobalState['globalScale'][number]
+		>(protocol, ['global', 'globalScale'], cachedGlobalScaleLength - 1);
+
+		const globalScale = getContractEventsGenerator({
+			client,
+			protocol,
+			contract: 'stabilityPool',
+			normalItemName: 'ScaleUpdated',
+			fromBlock:
+				cachedGlobalScale.length > 0
+					? cachedGlobalScale[0]!.blockNumber + 1n
+					: deployBlock,
+			toBlock: 'latest'
+		});
+
+		for await (const e of globalScale) {
+			if (e === null) break;
+			if (e instanceof Error) throw e;
+
+			const arr = e.map((i) => {
+				return {
+					scale: i.args._currentScale!,
+					blockNumber: i.blockNumber,
+					transactionIndex: i.transactionIndex,
+					timestamp: i.blockTimestamp!
+				};
+			});
+
+			await appendCachedArray(protocol, ['global', 'globalScale'], arr);
+		}
+	}
 
 	// globalEpoch
-	const epochUpdatedAbi = getAbiItem(
-		protocol,
-		'stabilityPool',
-		'EpochUpdated'
-	);
-	const epochUpdated = await client.getContractEvents({
-		address: protocols[protocol].stabilityPool,
-		abi: [epochUpdatedAbi],
-		eventName: epochUpdatedAbi.name,
-		// prettier-ignore
-		fromBlock:
-			cachedState.globalEpoch.length > 0
-				? cachedState.globalEpoch[cachedState.globalEpoch.length - 1]!
-					.blockNumber + 1n
-				: protocols[protocol].deployBlock,
-		toBlock: 'latest'
-	});
-	cachedState.globalEpoch.push(
-		...epochUpdated.map((e) => {
-			return {
-				epoch: e.args._currentEpoch!,
-				blockNumber: e.blockNumber,
-				transactionIndex: e.transactionIndex,
-				timestamp: e.blockTimestamp!
-			};
-		})
-	);
+	{
+		const cachedGlobalEpochLength = await getCachedArrayLength(protocol, [
+			'global',
+			'globalEpoch'
+		]);
+
+		const cachedGlobalEpoch = await getCachedArrayRange<
+			GlobalState['globalEpoch'][number]
+		>(protocol, ['global', 'globalEpoch'], cachedGlobalEpochLength - 1);
+
+		const globalEpoch = getContractEventsGenerator({
+			client,
+			protocol,
+			contract: 'stabilityPool',
+			normalItemName: 'EpochUpdated',
+			fromBlock:
+				cachedGlobalEpoch.length > 0
+					? cachedGlobalEpoch[0]!.blockNumber + 1n
+					: deployBlock,
+			toBlock: 'latest'
+		});
+
+		for await (const e of globalEpoch) {
+			if (e === null) break;
+			if (e instanceof Error) throw e;
+
+			const arr = e.map((i) => {
+				return {
+					epoch: i.args._currentEpoch!,
+					blockNumber: i.blockNumber,
+					transactionIndex: i.transactionIndex,
+					timestamp: i.blockTimestamp!
+				};
+			});
+
+			await appendCachedArray(protocol, ['global', 'globalEpoch'], arr);
+		}
+	}
 
 	// globalLTerms
-	const lTermsUpdatedAbi = getAbiItem(
-		protocol,
-		'troveManager',
-		'LTermsUpdated'
-	);
-	const lTermsUpdated = await client.getContractEvents({
-		address: protocols[protocol].troveManager,
-		abi: [lTermsUpdatedAbi],
-		eventName: lTermsUpdatedAbi.name,
-		// prettier-ignore
-		fromBlock:
-			cachedState.globalLTerms.length > 0
-				? cachedState.globalLTerms[cachedState.globalLTerms.length - 1]!
-					.blockNumber + 1n
-				: protocols[protocol].deployBlock,
-		toBlock: 'latest'
-	});
-	cachedState.globalLTerms.push(
-		...lTermsUpdated.map((e) => {
-			const _L_ETH = replaceBrandedWordsInString(
-				'_L_ETH',
-				protocols[protocol].modifiers
-			) as ReplaceBrandedWordsInStringForAllProtocols<'_L_ETH'>;
+	{
+		const cachedGlobalLTermsLength = await getCachedArrayLength(protocol, [
+			'global',
+			'globalLTerms'
+		]);
 
-			const lEth = e.args[
-				_L_ETH as keyof typeof e.args
-			] as ExtractUnionValue<
-				typeof e.args,
-				ReplaceBrandedWordsInStringForAllProtocols<'_L_ETH'>
-			>;
+		const cachedGlobalLTerms = await getCachedArrayRange<
+			GlobalState['globalLTerms'][number]
+		>(protocol, ['global', 'globalLTerms'], cachedGlobalLTermsLength - 1);
 
-			const _L_LUSDDebt = replaceBrandedWordsInString(
-				'_L_LUSDDebt',
-				protocols[protocol].modifiers
-			) as ReplaceBrandedWordsInStringForAllProtocols<'_L_LUSDDebt'>;
-			const lLusd = e.args[
-				_L_LUSDDebt as keyof typeof e.args
-			] as ExtractUnionValue<
-				typeof e.args,
-				ReplaceBrandedWordsInStringForAllProtocols<'_L_LUSDDebt'>
-			>;
+		const globalLTerms = getContractEventsGenerator({
+			client,
+			protocol,
+			contract: 'troveManager',
+			normalItemName: 'LTermsUpdated',
+			fromBlock:
+				cachedGlobalLTerms.length > 0
+					? cachedGlobalLTerms[0]!.blockNumber + 1n
+					: deployBlock,
+			toBlock: 'latest'
+		});
 
-			return {
-				lEth: lEth!,
-				lLusd: lLusd!,
-				blockNumber: e.blockNumber,
-				transactionIndex: e.transactionIndex,
-				timestamp: e.blockTimestamp!
-			};
-		})
-	);
+		for await (const e of globalLTerms) {
+			if (e === null) break;
+			if (e instanceof Error) throw e;
+
+			const arr = e.map((i) => {
+				const _L_ETH = replaceBrandedWordsInString(
+					'_L_ETH',
+					protocols[protocol].modifiers
+				) as ReplaceBrandedWordsInStringForAllProtocols<'_L_ETH'>;
+
+				const lEth = i.args[
+					_L_ETH as keyof typeof i.args
+				] as ExtractUnionValue<
+					typeof i.args,
+					ReplaceBrandedWordsInStringForAllProtocols<'_L_ETH'>
+				>;
+
+				const _L_LUSDDebt = replaceBrandedWordsInString(
+					'_L_LUSDDebt',
+					protocols[protocol].modifiers
+				) as ReplaceBrandedWordsInStringForAllProtocols<'_L_LUSDDebt'>;
+				const lLusd = i.args[
+					_L_LUSDDebt as keyof typeof i.args
+				] as ExtractUnionValue<
+					typeof i.args,
+					ReplaceBrandedWordsInStringForAllProtocols<'_L_LUSDDebt'>
+				>;
+
+				return {
+					lEth: lEth!,
+					lLusd: lLusd!,
+					blockNumber: i.blockNumber,
+					transactionIndex: i.transactionIndex,
+					timestamp: i.blockTimestamp!
+				};
+			});
+
+			await appendCachedArray(protocol, ['global', 'globalLTerms'], arr);
+		}
+	}
 
 	// globalFEth
-	const fEthUpdatedAbi = getAbiItem(protocol, 'lqtyStaking', 'F_ETHUpdated');
-	const fEthUpdated = await client.getContractEvents({
-		address: protocols[protocol].lqtyStaking,
-		abi: [fEthUpdatedAbi],
-		eventName: fEthUpdatedAbi.name,
-		// prettier-ignore
-		fromBlock:
-			cachedState.globalFEth.length > 0
-				? cachedState.globalFEth[cachedState.globalFEth.length - 1]!
-					.blockNumber + 1n
-				: protocols[protocol].deployBlock,
-		toBlock: 'latest'
-	});
-	cachedState.globalFEth.push(
-		...fEthUpdated.map((e) => {
-			const _fEth = replaceBrandedWordsInString(
-				'_F_ETH',
-				protocols[protocol].modifiers
-			) as ReplaceBrandedWordsInStringForAllProtocols<'_F_ETH'>;
-			const balance = e.args[
-				_fEth as keyof typeof e.args
-			] as ExtractUnionValue<
-				typeof e.args,
-				ReplaceBrandedWordsInStringForAllProtocols<'_F_ETH'>
-			>;
+	{
+		const globalFEthLength = await getCachedArrayLength(protocol, [
+			'global',
+			'globalFEth'
+		]);
 
-			return {
-				fEth: balance!,
-				blockNumber: e.blockNumber,
-				transactionIndex: e.transactionIndex,
-				timestamp: e.blockTimestamp!
-			};
-		})
-	);
+		const cachedGlobalFEth = await getCachedArrayRange<
+			GlobalState['globalFEth'][number]
+		>(protocol, ['global', 'globalFEth'], globalFEthLength);
+
+		const globalFEth = getContractEventsGenerator({
+			client,
+			protocol,
+			contract: 'lqtyStaking',
+			normalItemName: 'F_ETHUpdated',
+			fromBlock:
+				cachedGlobalFEth.length > 0
+					? cachedGlobalFEth[0]!.blockNumber + 1n
+					: deployBlock,
+			toBlock: 'latest'
+		});
+
+		for await (const e of globalFEth) {
+			if (e === null) break;
+			if (e instanceof Error) throw e;
+
+			const arr = e.map((i) => {
+				const _fEth = replaceBrandedWordsInString(
+					'_F_ETH',
+					protocols[protocol].modifiers
+				) as ReplaceBrandedWordsInStringForAllProtocols<'_F_ETH'>;
+				const fEth = i.args[
+					_fEth as keyof typeof i.args
+				] as ExtractUnionValue<
+					typeof i.args,
+					ReplaceBrandedWordsInStringForAllProtocols<'_F_ETH'>
+				>;
+
+				return {
+					fEth: fEth!,
+					blockNumber: i.blockNumber,
+					transactionIndex: i.transactionIndex,
+					timestamp: i.blockTimestamp!
+				};
+			});
+
+			await appendCachedArray(protocol, ['global', 'globalFEth'], arr);
+		}
+	}
 
 	// globalFLusd
-	const fLusdUpdatedAbi = getAbiItem(
-		protocol,
-		'lqtyStaking',
-		'F_LUSDUpdated'
-	);
-	const fLusdUpdated = await client.getContractEvents({
-		address: protocols[protocol].lqtyStaking,
-		abi: [fLusdUpdatedAbi],
-		eventName: fLusdUpdatedAbi.name,
-		// prettier-ignore
-		fromBlock:
-			cachedState.globalFLusd.length > 0
-				? cachedState.globalFLusd[cachedState.globalFLusd.length - 1]!
-					.blockNumber + 1n
-				: protocols[protocol].deployBlock,
-		toBlock: 'latest'
-	});
-	cachedState.globalFLusd.push(
-		...fLusdUpdated.map((e) => {
-			const _fLusd = replaceBrandedWordsInString(
-				'_F_LUSD',
-				protocols[protocol].modifiers
-			) as ReplaceBrandedWordsInStringForAllProtocols<'_F_LUSD'>;
-			const balance = e.args[
-				_fLusd as keyof typeof e.args
-			] as ExtractUnionValue<
-				typeof e.args,
-				ReplaceBrandedWordsInStringForAllProtocols<'_F_LUSD'>
-			>;
+	{
+		const cachedGlobalFLusdLength = await getCachedArrayLength(protocol, [
+			'global',
+			'globalFLusd'
+		]);
 
-			return {
-				fLusd: balance!,
-				blockNumber: e.blockNumber,
-				transactionIndex: e.transactionIndex,
-				timestamp: e.blockTimestamp!
-			};
-		})
-	);
-	await setCachedState(protocol, 'globalState', cachedState);
+		const cachedGlobalFLusd = await getCachedArrayRange<
+			GlobalState['globalFLusd'][number]
+		>(protocol, ['global', 'globalFLusd'], cachedGlobalFLusdLength - 1);
+
+		const globalFLusd = getContractEventsGenerator({
+			client,
+			protocol,
+			contract: 'lqtyStaking',
+			normalItemName: 'F_LUSDUpdated',
+			fromBlock:
+				cachedGlobalFLusd.length > 0
+					? cachedGlobalFLusd[0]!.blockNumber + 1n
+					: deployBlock,
+			toBlock: 'latest'
+		});
+
+		for await (const e of globalFLusd) {
+			if (e === null) break;
+			if (e instanceof Error) throw e;
+
+			const arr = e.map((i) => {
+				const _fLusd = replaceBrandedWordsInString(
+					'_F_LUSD',
+					protocols[protocol].modifiers
+				) as ReplaceBrandedWordsInStringForAllProtocols<'_F_LUSD'>;
+				const balance = i.args[
+					_fLusd as keyof typeof i.args
+				] as ExtractUnionValue<
+					typeof i.args,
+					ReplaceBrandedWordsInStringForAllProtocols<'_F_LUSD'>
+				>;
+
+				return {
+					fLusd: balance!,
+					blockNumber: i.blockNumber,
+					transactionIndex: i.transactionIndex,
+					timestamp: i.blockTimestamp!
+				};
+			});
+
+			await appendCachedArray(protocol, ['global', 'globalFLusd'], arr);
+		}
+	}
 
 	return {
 		DECIMAL_PRECISION,
 		SCALE_FACTOR,
-		...cachedState
+		frontEnds: (await getCachedState<GlobalState['frontEnds']>(protocol, [
+			'global',
+			'frontEnds'
+		]))!,
+		globalP: (await getCachedState<GlobalState['globalP']>(protocol, [
+			'global',
+			'globalP'
+		]))!,
+		globalS: (await getCachedState<GlobalState['globalS']>(protocol, [
+			'global',
+			'globalS'
+		]))!,
+		globalG: (await getCachedState<GlobalState['globalG']>(protocol, [
+			'global',
+			'globalG'
+		]))!,
+		globalScale: (await getCachedState<GlobalState['globalScale']>(
+			protocol,
+			['global', 'globalScale']
+		))!,
+		globalEpoch: (await getCachedState<GlobalState['globalEpoch']>(
+			protocol,
+			['global', 'globalEpoch']
+		))!,
+		globalLTerms: (await getCachedState<GlobalState['globalLTerms']>(
+			protocol,
+			['global', 'globalLTerms']
+		))!,
+		globalFEth: (await getCachedState<GlobalState['globalFEth']>(protocol, [
+			'global',
+			'globalFEth'
+		]))!,
+		globalFLusd: (await getCachedState<GlobalState['globalFLusd']>(
+			protocol,
+			['global', 'globalFLusd']
+		))!
 	};
 }
