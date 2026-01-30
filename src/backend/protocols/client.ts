@@ -9,7 +9,7 @@ export function createClient(protocol: ProtocolName) {
 	return createPublicClient({
 		chain: chains[chain.name],
 		transport: http(chain.rpc, {
-			timeout: 10_000_000
+			timeout: 100_000
 		})
 	});
 }

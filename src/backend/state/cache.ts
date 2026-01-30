@@ -287,6 +287,14 @@ export async function getCachedArrayRange<T = unknown>(
 	}
 }
 
+export async function readCachedArray<T = unknown>(
+	protocol: ProtocolName,
+	key: KeyPath
+): Promise<T[]> {
+	const len = await getCachedArrayLength(protocol, key);
+	return len > 0 ? getCachedArrayRange<T>(protocol, key, 0, len) : [];
+}
+
 /**
  * Append items to an array at a key path
  */
@@ -315,7 +323,7 @@ export async function appendCachedArray<T = unknown>(
 		// Process items in batches
 		for (let i = 0; i < items.length; i += BATCH_SIZE) {
 			const batch = items.slice(i, i + BATCH_SIZE);
-			
+
 			const db = await getDB();
 			const transaction = db.transaction([STORE_NAME], 'readwrite');
 			const store = transaction.objectStore(STORE_NAME);
@@ -418,6 +426,164 @@ export async function setCachedArray<T = unknown>(
 }
 
 /**
+ * Clear all cached state for a specific baseKey (e.g. a user address) within a protocol.
+ * Use this to delete all of one user's cached entries.
+ */
+export async function clearCachedStateForBaseKey(
+	protocol: ProtocolName,
+	baseKey: string
+): Promise<number> {
+	try {
+		const db = await getDB();
+		const transaction = db.transaction([STORE_NAME], 'readwrite');
+		const store = transaction.objectStore(STORE_NAME);
+		const index = store.index('baseKey');
+		const request = index.openCursor(IDBKeyRange.only([protocol, baseKey]));
+
+		let deletedCount = 0;
+
+		return new Promise((resolve, reject) => {
+			request.onsuccess = (event) => {
+				const cursor = (event.target as IDBRequest<IDBCursorWithValue>)
+					.result;
+				if (cursor) {
+					cursor.delete();
+					deletedCount++;
+					cursor.continue();
+				} else {
+					resolve(deletedCount);
+				}
+			};
+			request.onerror = () => reject(request.error);
+		});
+	} catch (error) {
+		console.warn('Failed to clear cached state for baseKey:', error);
+		throw error;
+	}
+}
+
+export type CacheEntrySummary = {
+	protocol: string;
+	baseKey: string;
+	entryCount: number;
+};
+
+/**
+ * Get a summary of all cache entries: unique (protocol, baseKey) pairs with entry counts.
+ */
+export async function getCacheEntriesSummary(): Promise<CacheEntrySummary[]> {
+	const db = await getDB();
+	const transaction = db.transaction([STORE_NAME], 'readonly');
+	const store = transaction.objectStore(STORE_NAME);
+	const request = store.openCursor();
+
+	const counts = new Map<string, number>();
+
+	return new Promise((resolve, reject) => {
+		request.onsuccess = (event) => {
+			const cursor = (event.target as IDBRequest<IDBCursorWithValue>)
+				.result;
+			if (cursor) {
+				const { protocol, baseKey } = cursor.value;
+				const key = `${protocol}\0${baseKey}`;
+				counts.set(key, (counts.get(key) ?? 0) + 1);
+				cursor.continue();
+			} else {
+				const result: CacheEntrySummary[] = [];
+				for (const [key, entryCount] of counts) {
+					const parts = key.split('\0');
+					result.push({
+						protocol: parts[0] ?? '',
+						baseKey: parts[1] ?? '',
+						entryCount
+					});
+				}
+				result.sort(
+					(a, b) =>
+						a.protocol.localeCompare(b.protocol) ||
+						a.baseKey.localeCompare(b.baseKey)
+				);
+				resolve(result);
+			}
+		};
+		request.onerror = () => reject(request.error);
+	});
+}
+
+export type CacheEntryRow = {
+	protocol: string;
+	baseKey: string;
+	pathStr: string;
+	path: string[];
+	index: number;
+	isArrayItem: boolean;
+};
+
+export type ListCacheEntriesFilter = {
+	protocol?: ProtocolName;
+	baseKey?: string;
+};
+
+/**
+ * List cache entries, optionally filtered by protocol and/or baseKey.
+ */
+export async function listCacheEntries(
+	filter?: ListCacheEntriesFilter
+): Promise<CacheEntryRow[]> {
+	const db = await getDB();
+	const transaction = db.transaction([STORE_NAME], 'readonly');
+	const store = transaction.objectStore(STORE_NAME);
+
+	const useIndex =
+		filter?.protocol !== undefined && filter?.baseKey !== undefined;
+	const request = useIndex
+		? store
+				.index('baseKey')
+				.openCursor(IDBKeyRange.only([filter.protocol, filter.baseKey]))
+		: filter?.protocol !== undefined
+		? store.index('protocol').openCursor(IDBKeyRange.only(filter.protocol))
+		: store.openCursor();
+
+	const rows: CacheEntryRow[] = [];
+
+	return new Promise((resolve, reject) => {
+		request.onsuccess = (event) => {
+			const cursor = (event.target as IDBRequest<IDBCursorWithValue>)
+				.result;
+			if (cursor) {
+				const { protocol, baseKey, pathStr, index } = cursor.value;
+				if (
+					filter?.baseKey !== undefined &&
+					filter?.protocol === undefined &&
+					baseKey !== filter.baseKey
+				) {
+					cursor.continue();
+					return;
+				}
+				let path: string[] = [];
+				try {
+					path = JSON.parse(pathStr) as string[];
+				} catch {
+					// ignore
+				}
+				rows.push({
+					protocol,
+					baseKey,
+					pathStr,
+					path,
+					index,
+					isArrayItem: typeof index === 'number' && index >= 0
+				});
+				cursor.continue();
+			} else {
+				resolve(rows);
+			}
+		};
+		request.onerror = () => reject(request.error);
+	});
+}
+
+/**
  * Clear all cached state for a protocol
  */
 export async function clearCachedState(protocol: ProtocolName): Promise<void> {
@@ -428,20 +594,76 @@ export async function clearCachedState(protocol: ProtocolName): Promise<void> {
 		const index = store.index('protocol');
 		const request = index.openCursor(IDBKeyRange.only(protocol));
 
+		let deletedCount = 0;
+		let cursorFinished = false;
+
 		return new Promise((resolve, reject) => {
+			// Set transaction handlers before starting cursor operations
+			transaction.oncomplete = () => {
+				if (cursorFinished) {
+					console.log(
+						`Deleted ${deletedCount} entries for protocol: ${protocol}`
+					);
+					resolve();
+				}
+			};
+			transaction.onerror = () => reject(transaction.error);
+
 			request.onsuccess = (event) => {
 				const cursor = (event.target as IDBRequest<IDBCursorWithValue>)
 					.result;
 				if (cursor) {
 					cursor.delete();
+					deletedCount++;
 					cursor.continue();
 				} else {
-					resolve();
+					// Cursor finished iterating
+					cursorFinished = true;
+					// If transaction already completed (unlikely but possible), resolve immediately
+					if (transaction.readyState === 'done') {
+						console.log(
+							`Deleted ${deletedCount} entries for protocol: ${protocol}`
+						);
+						resolve();
+					}
+					// Otherwise, wait for transaction.oncomplete
 				}
 			};
 			request.onerror = () => reject(request.error);
 		});
 	} catch (error) {
 		console.warn('Failed to clear cached state:', error);
+		throw error;
 	}
+}
+
+/**
+ * Completely delete the IndexedDB database
+ * This will remove the entire database, not just the data
+ */
+export async function deleteDatabase(): Promise<void> {
+	return new Promise((resolve, reject) => {
+		const request = indexedDB.deleteDatabase(DB_NAME);
+
+		request.onsuccess = () => {
+			console.log(`Database ${DB_NAME} deleted successfully`);
+			resolve();
+		};
+
+		request.onerror = () => {
+			console.error('Failed to delete database:', request.error);
+			reject(request.error);
+		};
+
+		request.onblocked = () => {
+			console.warn(
+				'Database deletion blocked - close all database connections first'
+			);
+			reject(
+				new Error(
+					'Database deletion blocked - close all connections first'
+				)
+			);
+		};
+	});
 }

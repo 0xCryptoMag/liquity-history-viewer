@@ -6,12 +6,7 @@ import {
 	borrowerOperationEnum,
 	troveManagerOperationEnum
 } from '../protocols/enums.js';
-import {
-	appendCachedArray,
-	getCachedArrayRange,
-	getCachedArrayLength,
-	getCachedState
-} from './cache.js';
+import { appendCachedArray, readCachedArray, getCachedState } from './cache.js';
 import { protocols } from '../protocols/protocols.js';
 import { replaceBrandedWordsInString } from '../protocols/rebrand.js';
 import { getContractEventsGenerator } from './events.js';
@@ -90,34 +85,34 @@ export async function getUserState(
 	protocol: ProtocolName,
 	userAddress: Address,
 	client: PublicClient
-) {
+): Promise<UserState> {
 	const { deployBlock } = protocols[protocol];
+
+	const latestBlock = await client.getBlockNumber();
 
 	// troveBorrowerOperations
 	{
-		const cachedTroveBorrowerOperationsLength = await getCachedArrayLength(
-			protocol,
-			[userAddress, 'troveBorrowerOperations']
-		);
-
-		const cachedTroveBorrowerOperations = await getCachedArrayRange<
-			UserState['troveBorrowerOperations'][number]
-		>(
-			protocol,
-			[userAddress, 'troveBorrowerOperations'],
-			cachedTroveBorrowerOperationsLength - 1
-		);
+		const cachedLastFetchedBlock = await getCachedState<bigint>(protocol, [
+			userAddress,
+			'troveBorrowerOperations',
+			'lastFetchedBlock'
+		]);
 
 		const troveBorrowerOperations = getContractEventsGenerator({
 			client,
 			protocol,
 			contract: 'borrowerOperations',
 			normalItemName: 'TroveUpdated',
+			args: {
+				_borrower: userAddress
+			},
 			fromBlock:
-				cachedTroveBorrowerOperations.length > 0
-					? cachedTroveBorrowerOperations[0]!.blockNumber + 1n
-					: deployBlock,
-			toBlock: 'latest'
+				cachedLastFetchedBlock === null
+					? deployBlock
+					: cachedLastFetchedBlock + 1n,
+			toBlock: latestBlock,
+			blockChunkSize: 75_000n,
+			keyPath: [userAddress, 'troveBorrowerOperations']
 		});
 
 		for await (const e of troveBorrowerOperations) {
@@ -146,25 +141,27 @@ export async function getUserState(
 
 	// collBalance
 	{
-		const cachedCollBalanceLength = await getCachedArrayLength(protocol, [
+		const cachedLastFetchedBlock = await getCachedState<bigint>(protocol, [
 			userAddress,
-			'collBalance'
+			'collBalance',
+			'lastFetchedBlock'
 		]);
-
-		const cachedCollBalance = await getCachedArrayRange<
-			UserState['collBalance'][number]
-		>(protocol, [userAddress, 'collBalance'], cachedCollBalanceLength - 1);
 
 		const collBalance = getContractEventsGenerator({
 			client,
 			protocol,
 			contract: 'collSurplusPool',
 			normalItemName: 'CollBalanceUpdated',
+			args: {
+				_account: userAddress
+			},
 			fromBlock:
-				cachedCollBalance.length > 0
-					? cachedCollBalance[0]!.blockNumber + 1n
-					: deployBlock,
-			toBlock: 'latest'
+				cachedLastFetchedBlock === null
+					? deployBlock
+					: cachedLastFetchedBlock + 1n,
+			toBlock: latestBlock,
+			blockChunkSize: 75_000n,
+			keyPath: [userAddress, 'collBalance']
 		});
 
 		for await (const e of collBalance) {
@@ -190,29 +187,27 @@ export async function getUserState(
 
 	// depositorSnapshots
 	{
-		const cachedDepositorSnapshotsLength = await getCachedArrayLength(
-			protocol,
-			[userAddress, 'depositorSnapshots']
-		);
-
-		const cachedDepositorSnapshots = await getCachedArrayRange<
-			UserState['depositorSnapshots'][number]
-		>(
-			protocol,
-			[userAddress, 'depositorSnapshots'],
-			cachedDepositorSnapshotsLength - 1
-		);
+		const cachedLastFetchedBlock = await getCachedState<bigint>(protocol, [
+			userAddress,
+			'depositorSnapshots',
+			'lastFetchedBlock'
+		]);
 
 		const depositorSnapshots = getContractEventsGenerator({
 			client,
 			protocol,
 			contract: 'stabilityPool',
 			normalItemName: 'DepositSnapshotUpdated',
+			args: {
+				_depositor: userAddress
+			},
 			fromBlock:
-				cachedDepositorSnapshots.length > 0
-					? cachedDepositorSnapshots[0]!.blockNumber + 1n
-					: deployBlock,
-			toBlock: 'latest'
+				cachedLastFetchedBlock === null
+					? deployBlock
+					: cachedLastFetchedBlock + 1n,
+			toBlock: latestBlock,
+			blockChunkSize: 75_000n,
+			keyPath: [userAddress, 'depositorSnapshots']
 		});
 
 		for await (const e of depositorSnapshots) {
@@ -240,29 +235,27 @@ export async function getUserState(
 
 	// depositedLusd
 	{
-		const cachedDepositedLusdLength = await getCachedArrayLength(protocol, [
+		const cachedLastFetchedBlock = await getCachedState<bigint>(protocol, [
 			userAddress,
-			'depositedLusd'
+			'depositedLusd',
+			'lastFetchedBlock'
 		]);
-
-		const cachedDepositedLusd = await getCachedArrayRange<
-			UserState['depositedLusd'][number]
-		>(
-			protocol,
-			[userAddress, 'depositedLusd'],
-			cachedDepositedLusdLength - 1
-		);
 
 		const depositedLusd = getContractEventsGenerator({
 			client,
 			protocol,
 			contract: 'stabilityPool',
 			normalItemName: 'UserDepositChanged',
+			args: {
+				_depositor: userAddress
+			},
 			fromBlock:
-				cachedDepositedLusd.length > 0
-					? cachedDepositedLusd[0]!.blockNumber + 1n
-					: deployBlock,
-			toBlock: 'latest'
+				cachedLastFetchedBlock === null
+					? deployBlock
+					: cachedLastFetchedBlock + 1n,
+			toBlock: latestBlock,
+			blockChunkSize: 75_000n,
+			keyPath: [userAddress, 'depositedLusd']
 		});
 
 		for await (const e of depositedLusd) {
@@ -288,25 +281,27 @@ export async function getUserState(
 
 	// frontEndTag
 	{
-		const cachedFrontEndTagLength = await getCachedArrayLength(protocol, [
+		const cachedLastFetchedBlock = await getCachedState<bigint>(protocol, [
 			userAddress,
-			'frontEndTag'
+			'frontEndTag',
+			'lastFetchedBlock'
 		]);
-
-		const cachedFrontEndTag = await getCachedArrayRange<
-			UserState['frontEndTag'][number]
-		>(protocol, [userAddress, 'frontEndTag'], cachedFrontEndTagLength - 1);
 
 		const frontEndTag = getContractEventsGenerator({
 			client,
 			protocol,
 			contract: 'stabilityPool',
 			normalItemName: 'FrontEndTagSet',
+			args: {
+				_depositor: userAddress
+			},
 			fromBlock:
-				cachedFrontEndTag.length > 0
-					? cachedFrontEndTag[0]!.blockNumber + 1n
-					: deployBlock,
-			toBlock: 'latest'
+				cachedLastFetchedBlock === null
+					? deployBlock
+					: cachedLastFetchedBlock + 1n,
+			toBlock: latestBlock,
+			blockChunkSize: 75_000n,
+			keyPath: [userAddress, 'frontEndTag']
 		});
 
 		for await (const e of frontEndTag) {
@@ -332,29 +327,27 @@ export async function getUserState(
 
 	// troveTroveManager
 	{
-		const cachedTroveTroveManagerLength = await getCachedArrayLength(
-			protocol,
-			[userAddress, 'troveTroveManager']
-		);
-
-		const cachedTroveTroveManager = await getCachedArrayRange<
-			UserState['troveTroveManager'][number]
-		>(
-			protocol,
-			[userAddress, 'troveTroveManager'],
-			cachedTroveTroveManagerLength - 1
-		);
+		const cachedLastFetchedBlock = await getCachedState<bigint>(protocol, [
+			userAddress,
+			'troveTroveManager',
+			'lastFetchedBlock'
+		]);
 
 		const troveTroveManager = getContractEventsGenerator({
 			client,
 			protocol,
 			contract: 'troveManager',
 			normalItemName: 'TroveUpdated',
+			args: {
+				_borrower: userAddress
+			},
 			fromBlock:
-				cachedTroveTroveManager.length > 0
-					? cachedTroveTroveManager[0]!.blockNumber + 1n
-					: deployBlock,
-			toBlock: 'latest'
+				cachedLastFetchedBlock === null
+					? deployBlock
+					: cachedLastFetchedBlock + 1n,
+			toBlock: latestBlock,
+			blockChunkSize: 75_000n,
+			keyPath: [userAddress, 'troveTroveManager']
 		});
 
 		for await (const e of troveTroveManager) {
@@ -383,25 +376,27 @@ export async function getUserState(
 
 	// stakedLqty
 	{
-		const cachedStakedLqtyLength = await getCachedArrayLength(protocol, [
+		const cachedLastFetchedBlock = await getCachedState<bigint>(protocol, [
 			userAddress,
-			'stakedLqty'
+			'stakedLqty',
+			'lastFetchedBlock'
 		]);
-
-		const cachedStakedLqty = await getCachedArrayRange<
-			UserState['stakedLqty'][number]
-		>(protocol, [userAddress, 'stakedLqty'], cachedStakedLqtyLength - 1);
 
 		const stakeChanged = getContractEventsGenerator({
 			client,
 			protocol,
 			contract: 'lqtyStaking',
 			normalItemName: 'StakeChanged',
+			args: {
+				staker: userAddress
+			},
 			fromBlock:
-				cachedStakedLqty.length > 0
-					? cachedStakedLqty[0]!.blockNumber + 1n
-					: deployBlock,
-			toBlock: 'latest'
+				cachedLastFetchedBlock === null
+					? deployBlock
+					: cachedLastFetchedBlock + 1n,
+			toBlock: latestBlock,
+			blockChunkSize: 75_000n,
+			keyPath: [userAddress, 'stakedLqty']
 		});
 
 		for await (const e of stakeChanged) {
@@ -423,18 +418,11 @@ export async function getUserState(
 
 	// stakerSnapshots
 	{
-		const cachedStakerSnapshotsLength = await getCachedArrayLength(
-			protocol,
-			[userAddress, 'stakerSnapshots']
-		);
-
-		const cachedStakerSnapshots = await getCachedArrayRange<
-			UserState['stakerSnapshots'][number]
-		>(
-			protocol,
-			[userAddress, 'stakerSnapshots'],
-			cachedStakerSnapshotsLength - 1
-		);
+		const cachedLastFetchedBlock = await getCachedState<bigint>(protocol, [
+			userAddress,
+			'stakerSnapshots',
+			'lastFetchedBlock'
+		]);
 
 		const stakerSnapshots = getContractEventsGenerator({
 			client,
@@ -442,10 +430,12 @@ export async function getUserState(
 			contract: 'lqtyStaking',
 			normalItemName: 'StakerSnapshotsUpdated',
 			fromBlock:
-				cachedStakerSnapshots.length > 0
-					? cachedStakerSnapshots[0]!.blockNumber + 1n
-					: deployBlock,
-			toBlock: 'latest'
+				cachedLastFetchedBlock === null
+					? deployBlock
+					: cachedLastFetchedBlock + 1n,
+			toBlock: latestBlock,
+			blockChunkSize: 75_000n,
+			keyPath: [userAddress, 'stakerSnapshots']
 		});
 
 		for await (const e of stakerSnapshots) {
@@ -496,35 +486,42 @@ export async function getUserState(
 		}
 	}
 
+	const troveBorrowerOperations = await readCachedArray<
+		UserState['troveBorrowerOperations'][number]
+	>(protocol, [userAddress, 'troveBorrowerOperations']);
+	const collBalance = await readCachedArray<UserState['collBalance'][number]>(
+		protocol,
+		[userAddress, 'collBalance']
+	);
+	const depositorSnapshots = await readCachedArray<
+		UserState['depositorSnapshots'][number]
+	>(protocol, [userAddress, 'depositorSnapshots']);
+	const depositedLusd = await readCachedArray<
+		UserState['depositedLusd'][number]
+	>(protocol, [userAddress, 'depositedLusd']);
+	const frontEndTag = await readCachedArray<UserState['frontEndTag'][number]>(
+		protocol,
+		[userAddress, 'frontEndTag']
+	);
+	const troveTroveManager = await readCachedArray<
+		UserState['troveTroveManager'][number]
+	>(protocol, [userAddress, 'troveTroveManager']);
+	const stakedLqty = await readCachedArray<UserState['stakedLqty'][number]>(
+		protocol,
+		[userAddress, 'stakedLqty']
+	);
+	const stakerSnapshots = await readCachedArray<
+		UserState['stakerSnapshots'][number]
+	>(protocol, [userAddress, 'stakerSnapshots']);
+
 	return {
-		troveBorrowerOperations: (await getCachedState<
-			UserState['troveBorrowerOperations']
-		>(protocol, [userAddress, 'troveBorrowerOperations']))!,
-		collBalance: (await getCachedState<UserState['collBalance']>(protocol, [
-			userAddress,
-			'collBalance'
-		]))!,
-		depositorSnapshots: (await getCachedState<
-			UserState['depositorSnapshots']
-		>(protocol, [userAddress, 'depositorSnapshots']))!,
-		depositedLusd: (await getCachedState<UserState['depositedLusd']>(
-			protocol,
-			[userAddress, 'depositedLusd']
-		))!,
-		frontEndTag: (await getCachedState<UserState['frontEndTag']>(protocol, [
-			userAddress,
-			'frontEndTag'
-		]))!,
-		troveTroveManager: (await getCachedState<
-			UserState['troveTroveManager']
-		>(protocol, [userAddress, 'troveTroveManager']))!,
-		stakedLqty: (await getCachedState<UserState['stakedLqty']>(protocol, [
-			userAddress,
-			'stakedLqty'
-		]))!,
-		stakerSnapshots: (await getCachedState<UserState['stakerSnapshots']>(
-			protocol,
-			[userAddress, 'stakerSnapshots']
-		))!
+		troveBorrowerOperations,
+		collBalance,
+		depositorSnapshots,
+		depositedLusd,
+		frontEndTag,
+		troveTroveManager,
+		stakedLqty,
+		stakerSnapshots
 	};
 }
