@@ -524,6 +524,65 @@ export type ListCacheEntriesFilter = {
 	baseKey?: string;
 };
 
+export type DisplayCacheEntry = {
+	protocol: string;
+	baseKey: string;
+	keyPath: string[];
+	isArray: boolean;
+	length?: number;
+};
+
+/**
+ * List cache key paths for display: one entry per (protocol, baseKey, display path).
+ * keyPath excludes a trailing 'lastFetchedBlock'. Arrays show isArray: true and length.
+ */
+export async function listCacheKeyPathsForDisplay(
+	filter?: ListCacheEntriesFilter
+): Promise<DisplayCacheEntry[]> {
+	const rows = await listCacheEntries(filter);
+	// Drop rows where path ends with 'lastFetchedBlock'
+	const withoutLastFetched = rows.filter(
+		(row) => row.path[row.path.length - 1] !== 'lastFetchedBlock'
+	);
+	// Derive display path: if last segment is 'lastFetchedBlock' use path.slice(0, -1); else use path
+	// (we already filtered those out, so display path = path for remaining)
+	const pathStr = (path: string[]) => JSON.stringify(path);
+	const groups = new Map<
+		string,
+		{
+			protocol: string;
+			baseKey: string;
+			keyPath: string[];
+			maxIndex: number;
+		}
+	>();
+	for (const row of withoutLastFetched) {
+		const displayPath = row.path;
+		const key = `${row.protocol}\0${row.baseKey}\0${pathStr(displayPath)}`;
+		const existing = groups.get(key);
+		if (!existing) {
+			groups.set(key, {
+				protocol: row.protocol,
+				baseKey: row.baseKey,
+				keyPath: displayPath,
+				maxIndex:
+					row.isArrayItem && typeof row.index === 'number'
+						? row.index
+						: -1
+			});
+		} else if (row.isArrayItem && typeof row.index === 'number') {
+			existing.maxIndex = Math.max(existing.maxIndex, row.index);
+		}
+	}
+	return Array.from(groups.values()).map((g) => ({
+		protocol: g.protocol,
+		baseKey: g.baseKey,
+		keyPath: g.keyPath,
+		isArray: g.maxIndex >= 0,
+		...(g.maxIndex >= 0 && { length: g.maxIndex + 1 })
+	}));
+}
+
 /**
  * List cache entries, optionally filtered by protocol and/or baseKey.
  */

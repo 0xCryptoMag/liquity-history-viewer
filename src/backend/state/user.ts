@@ -6,10 +6,15 @@ import {
 	borrowerOperationEnum,
 	troveManagerOperationEnum
 } from '../protocols/enums.js';
-import { appendCachedArray, readCachedArray, getCachedState } from './cache.js';
+import {
+	appendCachedArray,
+	readCachedArray,
+	getCachedState,
+	setCachedState
+} from './cache.js';
 import { protocols } from '../protocols/protocols.js';
 import { replaceBrandedWordsInString } from '../protocols/rebrand.js';
-import { getContractEventsGenerator } from './events.js';
+import { getContractEventsGenerator, getBlockTimestamps } from './events.js';
 
 export type UserState = {
 	// Borrower Operations
@@ -84,13 +89,16 @@ export type UserState = {
 export async function getUserState(
 	protocol: ProtocolName,
 	userAddress: Address,
-	client: PublicClient
+	client: PublicClient,
+	blockNumberToTimestampMap: Map<bigint, bigint>,
+	progress?: (key: string) => void
 ): Promise<UserState> {
 	const { deployBlock } = protocols[protocol];
 
 	const latestBlock = await client.getBlockNumber();
 
 	// troveBorrowerOperations
+	progress?.('Retrieving user initiated trove changes');
 	{
 		const cachedLastFetchedBlock = await getCachedState<bigint>(protocol, [
 			userAddress,
@@ -111,15 +119,20 @@ export async function getUserState(
 					? deployBlock
 					: cachedLastFetchedBlock + 1n,
 			toBlock: latestBlock,
-			blockChunkSize: 75_000n,
-			keyPath: [userAddress, 'troveBorrowerOperations']
+			blockChunkSize: 75_000n
 		});
 
 		for await (const e of troveBorrowerOperations) {
 			if (e === null) break;
 			if (e instanceof Error) throw e;
 
-			const arr = e.map((i) => {
+			await getBlockTimestamps({
+				client,
+				blockNumberToTimestampMap,
+				events: e.events
+			});
+
+			const arr = e.events.map((i) => {
 				return {
 					coll: i.args._coll!,
 					debt: i.args._debt!,
@@ -136,10 +149,18 @@ export async function getUserState(
 				[userAddress, 'troveBorrowerOperations'],
 				arr
 			);
+			await setCachedState(
+				protocol,
+				[userAddress, 'troveBorrowerOperations', 'lastFetchedBlock'],
+				e.lastFetchedBlock
+			);
 		}
 	}
 
 	// collBalance
+	progress?.(
+		'Retrieving user coll surplus from redeem to close and certain recovery mode liquidations'
+	);
 	{
 		const cachedLastFetchedBlock = await getCachedState<bigint>(protocol, [
 			userAddress,
@@ -160,15 +181,20 @@ export async function getUserState(
 					? deployBlock
 					: cachedLastFetchedBlock + 1n,
 			toBlock: latestBlock,
-			blockChunkSize: 75_000n,
-			keyPath: [userAddress, 'collBalance']
+			blockChunkSize: 75_000n
 		});
 
 		for await (const e of collBalance) {
 			if (e === null) break;
 			if (e instanceof Error) throw e;
 
-			const arr = e.map((i) => {
+			await getBlockTimestamps({
+				client,
+				blockNumberToTimestampMap,
+				events: e.events
+			});
+
+			const arr = e.events.map((i) => {
 				return {
 					surplus: i.args._newBalance!,
 					blockNumber: i.blockNumber,
@@ -182,10 +208,18 @@ export async function getUserState(
 				[userAddress, 'collBalance'],
 				arr
 			);
+			await setCachedState(
+				protocol,
+				[userAddress, 'collBalance', 'lastFetchedBlock'],
+				e.lastFetchedBlock
+			);
 		}
 	}
 
 	// depositorSnapshots
+	progress?.(
+		'Retrieving user stability pool deposit P, S and G accumulator snapshots'
+	);
 	{
 		const cachedLastFetchedBlock = await getCachedState<bigint>(protocol, [
 			userAddress,
@@ -206,15 +240,20 @@ export async function getUserState(
 					? deployBlock
 					: cachedLastFetchedBlock + 1n,
 			toBlock: latestBlock,
-			blockChunkSize: 75_000n,
-			keyPath: [userAddress, 'depositorSnapshots']
+			blockChunkSize: 75_000n
 		});
 
 		for await (const e of depositorSnapshots) {
 			if (e === null) break;
 			if (e instanceof Error) throw e;
 
-			const arr = e.map((i) => {
+			await getBlockTimestamps({
+				client,
+				blockNumberToTimestampMap,
+				events: e.events
+			});
+
+			const arr = e.events.map((i) => {
 				return {
 					P: i.args._P!,
 					S: i.args._S!,
@@ -230,10 +269,18 @@ export async function getUserState(
 				[userAddress, 'depositorSnapshots'],
 				arr
 			);
+			await setCachedState(
+				protocol,
+				[userAddress, 'depositorSnapshots', 'lastFetchedBlock'],
+				e.lastFetchedBlock
+			);
 		}
 	}
 
 	// depositedLusd
+	progress?.(
+		'Retrieving user stability pool deposit and withdrawal LUSD changes'
+	);
 	{
 		const cachedLastFetchedBlock = await getCachedState<bigint>(protocol, [
 			userAddress,
@@ -254,15 +301,20 @@ export async function getUserState(
 					? deployBlock
 					: cachedLastFetchedBlock + 1n,
 			toBlock: latestBlock,
-			blockChunkSize: 75_000n,
-			keyPath: [userAddress, 'depositedLusd']
+			blockChunkSize: 75_000n
 		});
 
 		for await (const e of depositedLusd) {
 			if (e === null) break;
 			if (e instanceof Error) throw e;
 
-			const arr = e.map((i) => {
+			await getBlockTimestamps({
+				client,
+				blockNumberToTimestampMap,
+				events: e.events
+			});
+
+			const arr = e.events.map((i) => {
 				return {
 					deposit: i.args._newDeposit!,
 					blockNumber: i.blockNumber,
@@ -276,10 +328,16 @@ export async function getUserState(
 				[userAddress, 'depositedLusd'],
 				arr
 			);
+			await setCachedState(
+				protocol,
+				[userAddress, 'depositedLusd', 'lastFetchedBlock'],
+				e.lastFetchedBlock
+			);
 		}
 	}
 
 	// frontEndTag
+	progress?.('Retrieving user stability pool front end tag changes');
 	{
 		const cachedLastFetchedBlock = await getCachedState<bigint>(protocol, [
 			userAddress,
@@ -300,15 +358,20 @@ export async function getUserState(
 					? deployBlock
 					: cachedLastFetchedBlock + 1n,
 			toBlock: latestBlock,
-			blockChunkSize: 75_000n,
-			keyPath: [userAddress, 'frontEndTag']
+			blockChunkSize: 75_000n
 		});
 
 		for await (const e of frontEndTag) {
 			if (e === null) break;
 			if (e instanceof Error) throw e;
 
-			const arr = e.map((i) => {
+			await getBlockTimestamps({
+				client,
+				blockNumberToTimestampMap,
+				events: e.events
+			});
+
+			const arr = e.events.map((i) => {
 				return {
 					frontEndTag: i.args._frontEnd!,
 					blockNumber: i.blockNumber,
@@ -322,10 +385,16 @@ export async function getUserState(
 				[userAddress, 'frontEndTag'],
 				arr
 			);
+			await setCachedState(
+				protocol,
+				[userAddress, 'frontEndTag', 'lastFetchedBlock'],
+				e.lastFetchedBlock
+			);
 		}
 	}
 
 	// troveTroveManager
+	progress?.('Retrieving user trove changes from trove manager');
 	{
 		const cachedLastFetchedBlock = await getCachedState<bigint>(protocol, [
 			userAddress,
@@ -346,15 +415,20 @@ export async function getUserState(
 					? deployBlock
 					: cachedLastFetchedBlock + 1n,
 			toBlock: latestBlock,
-			blockChunkSize: 75_000n,
-			keyPath: [userAddress, 'troveTroveManager']
+			blockChunkSize: 75_000n
 		});
 
 		for await (const e of troveTroveManager) {
 			if (e === null) break;
 			if (e instanceof Error) throw e;
 
-			const arr = e.map((i) => {
+			await getBlockTimestamps({
+				client,
+				blockNumberToTimestampMap,
+				events: e.events
+			});
+
+			const arr = e.events.map((i) => {
 				return {
 					debt: i.args._debt!,
 					coll: i.args._coll!,
@@ -371,10 +445,16 @@ export async function getUserState(
 				[userAddress, 'troveTroveManager'],
 				arr
 			);
+			await setCachedState(
+				protocol,
+				[userAddress, 'troveTroveManager', 'lastFetchedBlock'],
+				e.lastFetchedBlock
+			);
 		}
 	}
 
 	// stakedLqty
+	progress?.('Retrieving user LQTY staking stake changes');
 	{
 		const cachedLastFetchedBlock = await getCachedState<bigint>(protocol, [
 			userAddress,
@@ -395,15 +475,20 @@ export async function getUserState(
 					? deployBlock
 					: cachedLastFetchedBlock + 1n,
 			toBlock: latestBlock,
-			blockChunkSize: 75_000n,
-			keyPath: [userAddress, 'stakedLqty']
+			blockChunkSize: 75_000n
 		});
 
 		for await (const e of stakeChanged) {
 			if (e === null) break;
 			if (e instanceof Error) throw e;
 
-			const arr = e.map((i) => {
+			await getBlockTimestamps({
+				client,
+				blockNumberToTimestampMap,
+				events: e.events
+			});
+
+			const arr = e.events.map((i) => {
 				return {
 					stake: i.args.newStake!,
 					blockNumber: i.blockNumber,
@@ -413,10 +498,18 @@ export async function getUserState(
 			});
 
 			await appendCachedArray(protocol, [userAddress, 'stakedLqty'], arr);
+			await setCachedState(
+				protocol,
+				[userAddress, 'stakedLqty', 'lastFetchedBlock'],
+				e.lastFetchedBlock
+			);
 		}
 	}
 
 	// stakerSnapshots
+	progress?.(
+		'Retrieving user LQTY staking fETH and fLUSD accumulator snapshots'
+	);
 	{
 		const cachedLastFetchedBlock = await getCachedState<bigint>(protocol, [
 			userAddress,
@@ -434,15 +527,20 @@ export async function getUserState(
 					? deployBlock
 					: cachedLastFetchedBlock + 1n,
 			toBlock: latestBlock,
-			blockChunkSize: 75_000n,
-			keyPath: [userAddress, 'stakerSnapshots']
+			blockChunkSize: 75_000n
 		});
 
 		for await (const e of stakerSnapshots) {
 			if (e === null) break;
 			if (e instanceof Error) throw e;
 
-			const arr = e
+			await getBlockTimestamps({
+				client,
+				blockNumberToTimestampMap,
+				events: e.events
+			});
+
+			const arr = e.events
 				.filter((i) => i.args._staker === userAddress)
 				.map((i) => {
 					const _F_ETH = replaceBrandedWordsInString(
@@ -482,6 +580,11 @@ export async function getUserState(
 				protocol,
 				[userAddress, 'stakerSnapshots'],
 				arr
+			);
+			await setCachedState(
+				protocol,
+				[userAddress, 'stakerSnapshots', 'lastFetchedBlock'],
+				e.lastFetchedBlock
 			);
 		}
 	}

@@ -11,6 +11,22 @@ import { isAfter, isSameTxn, isBefore } from '../utils/helpers.js';
 import { getAbiItem } from '../protocols/modify.js';
 import { protocols } from '../protocols/protocols.js';
 
+export type TimelineOptions = {
+	applyPendingTroveFromEmptyPoolLiquidation?: boolean;
+	applyPendingLqtyFrom3rdPartyStabilityPool?: boolean;
+	applyPendingStabilityPoolFromLiquidation?: boolean;
+	applyPendingEthGainFromRedemption?: boolean;
+	applyPendingLusdGainFromDepositFee?: boolean;
+};
+
+const defaultTimelineOptions: Required<TimelineOptions> = {
+	applyPendingTroveFromEmptyPoolLiquidation: true,
+	applyPendingLqtyFrom3rdPartyStabilityPool: false,
+	applyPendingStabilityPoolFromLiquidation: true,
+	applyPendingEthGainFromRedemption: false,
+	applyPendingLusdGainFromDepositFee: false
+};
+
 export type Timeline = {
 	trove: {
 		coll: bigint;
@@ -64,12 +80,30 @@ export type Timeline = {
 
 export async function constructTimeline(
 	protocol: ProtocolName,
-	userAddress: Address
+	userAddress: Address,
+	options?: TimelineOptions,
+	progress?: (message: string) => void
 ) {
 	const client = createClient(protocol);
+	const opts = { ...defaultTimelineOptions, ...options };
 
-	const globalState = await getGlobalState(protocol, client);
-	const userState = await getUserState(protocol, userAddress, client);
+	// no need to cache blockNumber to timestamp, once a protocol is synced,
+	// the timestamp is cached with the event
+	const blockNumberToTimestampMap = new Map<bigint, bigint>();
+
+	const globalState = await getGlobalState(
+		protocol,
+		client,
+		blockNumberToTimestampMap,
+		(key) => progress?.('Global: ' + key)
+	);
+	const userState = await getUserState(
+		protocol,
+		userAddress,
+		client,
+		blockNumberToTimestampMap,
+		(key) => progress?.('User: ' + key)
+	);
 
 	const timeline: Timeline = {
 		trove: [
@@ -148,6 +182,7 @@ export async function constructTimeline(
 		]
 	};
 
+	progress?.('Building timeline…');
 	spliceTroveEventsFromLTerms(timeline, globalState);
 	await spliceStabilityPoolEventsFromPSAndG(
 		timeline,
@@ -157,6 +192,33 @@ export async function constructTimeline(
 		protocol
 	);
 	spliceLqtyStakingPoolEventsFromFTerms(timeline, globalState, userState);
+
+	// Post-pass: filter entries by options
+	if (!opts.applyPendingTroveFromEmptyPoolLiquidation) {
+		timeline.trove = timeline.trove.filter(
+			(e) => e.operation !== '3rdPartyLiquidationWithEmptyStabilityPool'
+		);
+	}
+	if (!opts.applyPendingLqtyFrom3rdPartyStabilityPool) {
+		timeline.stabilityPool = timeline.stabilityPool.filter(
+			(e) => e.operation !== '3rdPartyUserAction'
+		);
+	}
+	if (!opts.applyPendingStabilityPoolFromLiquidation) {
+		timeline.stabilityPool = timeline.stabilityPool.filter(
+			(e) => e.operation !== '3rdPartyLiquidationWithStabilityPoolOffset'
+		);
+	}
+	if (!opts.applyPendingEthGainFromRedemption) {
+		timeline.lqtyStakingPool = timeline.lqtyStakingPool.filter(
+			(e) => e.operation !== '3rdPartyRedemptionFeePaid'
+		);
+	}
+	if (!opts.applyPendingLusdGainFromDepositFee) {
+		timeline.lqtyStakingPool = timeline.lqtyStakingPool.filter(
+			(e) => e.operation !== '3rdPartyDepositFeePaid'
+		);
+	}
 
 	return timeline;
 }

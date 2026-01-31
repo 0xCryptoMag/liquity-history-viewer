@@ -11,7 +11,7 @@ import {
 	readCachedArray,
 	getCachedState
 } from './cache.js';
-import { getContractEventsGenerator } from './events.js';
+import { getContractEventsGenerator, getBlockTimestamps } from './events.js';
 
 export type GlobalState = {
 	// Constans
@@ -83,12 +83,15 @@ export type GlobalState = {
 
 export async function getGlobalState(
 	protocol: ProtocolName,
-	client: PublicClient
+	client: PublicClient,
+	blockNumberToTimestampMap: Map<bigint, bigint>,
+	progress?: (key: string) => void
 ): Promise<GlobalState> {
 	const { deployBlock } = protocols[protocol];
 
 	const latestBlock = await client.getBlockNumber();
 
+	progress?.('Retrieving protocol constants');
 	// DECIMAL_PRECISION
 	const DECIMAL_PRECISIONAbi = getAbiItem(
 		protocol,
@@ -120,6 +123,7 @@ export async function getGlobalState(
 	await setCachedState(protocol, ['global', 'SCALE_FACTOR'], SCALE_FACTOR);
 
 	// frontEnds
+	progress?.('Retrieving registered front ends and kickback rates');
 	{
 		const cachedLastFetchedBlock = await getCachedState<bigint>(protocol, [
 			'global',
@@ -137,15 +141,20 @@ export async function getGlobalState(
 					? deployBlock
 					: cachedLastFetchedBlock + 1n,
 			toBlock: latestBlock,
-			blockChunkSize: 75_000n,
-			keyPath: ['global', 'frontEnds']
+			blockChunkSize: 75_000n
 		});
 
 		for await (const e of frontEnds) {
 			if (e === null) break;
 			if (e instanceof Error) throw e;
 
-			const arr = e.map((i) => {
+			await getBlockTimestamps({
+				client,
+				blockNumberToTimestampMap,
+				events: e.events
+			});
+
+			const arr = e.events.map((i) => {
 				return {
 					frontEnd: i.args._frontEnd!,
 					kickbackRate: i.args._kickbackRate!,
@@ -156,10 +165,16 @@ export async function getGlobalState(
 			});
 
 			await appendCachedArray(protocol, ['global', 'frontEnds'], arr);
+			await setCachedState(
+				protocol,
+				['global', 'frontEnds', 'lastFetchedBlock'],
+				e.lastFetchedBlock
+			);
 		}
 	}
 
 	// globalP
+	progress?.('Retrieving stability pool P (Product) accumulator changes');
 	{
 		const cachedLastFetchedBlock = await getCachedState<bigint>(protocol, [
 			'global',
@@ -177,15 +192,20 @@ export async function getGlobalState(
 					? deployBlock
 					: cachedLastFetchedBlock + 1n,
 			toBlock: latestBlock,
-			blockChunkSize: 75_000n,
-			keyPath: ['global', 'globalP']
+			blockChunkSize: 75_000n
 		});
 
 		for await (const e of globalP) {
 			if (e === null) break;
 			if (e instanceof Error) throw e;
 
-			const arr = e.map((i) => {
+			await getBlockTimestamps({
+				client,
+				blockNumberToTimestampMap,
+				events: e.events
+			});
+
+			const arr = e.events.map((i) => {
 				return {
 					P: i.args._P!,
 					blockNumber: i.blockNumber,
@@ -195,10 +215,16 @@ export async function getGlobalState(
 			});
 
 			await appendCachedArray(protocol, ['global', 'globalP'], arr);
+			await setCachedState(
+				protocol,
+				['global', 'globalP', 'lastFetchedBlock'],
+				e.lastFetchedBlock
+			);
 		}
 	}
 
 	// globalS
+	progress?.('Retrieving stability pool S (Sum) accumulator changes');
 	{
 		const cachedLastFetchedBlock = await getCachedState<bigint>(protocol, [
 			'global',
@@ -216,15 +242,20 @@ export async function getGlobalState(
 					? deployBlock
 					: cachedLastFetchedBlock + 1n,
 			toBlock: latestBlock,
-			blockChunkSize: 75_000n,
-			keyPath: ['global', 'globalS']
+			blockChunkSize: 75_000n
 		});
 
 		for await (const e of globalS) {
 			if (e === null) break;
 			if (e instanceof Error) throw e;
 
-			const arr = e.map((i) => {
+			await getBlockTimestamps({
+				client,
+				blockNumberToTimestampMap,
+				events: e.events
+			});
+
+			const arr = e.events.map((i) => {
 				return {
 					S: i.args._S!,
 					blockNumber: i.blockNumber,
@@ -234,10 +265,18 @@ export async function getGlobalState(
 			});
 
 			await appendCachedArray(protocol, ['global', 'globalS'], arr);
+			await setCachedState(
+				protocol,
+				['global', 'globalS', 'lastFetchedBlock'],
+				e.lastFetchedBlock
+			);
 		}
 	}
 
 	// globalG
+	progress?.(
+		'Retrieving stability pool G (Sum of LQTY gain) accumulator changes'
+	);
 	{
 		const cachedLastFetchedBlock = await getCachedState<bigint>(protocol, [
 			'global',
@@ -255,15 +294,20 @@ export async function getGlobalState(
 					? deployBlock
 					: cachedLastFetchedBlock + 1n,
 			toBlock: latestBlock,
-			blockChunkSize: 75_000n,
-			keyPath: ['global', 'globalG']
+			blockChunkSize: 75_000n
 		});
 
 		for await (const e of globalG) {
 			if (e === null) break;
 			if (e instanceof Error) throw e;
 
-			const arr = e.map((i) => {
+			await getBlockTimestamps({
+				client,
+				blockNumberToTimestampMap,
+				events: e.events
+			});
+
+			const arr = e.events.map((i) => {
 				return {
 					G: i.args._G!,
 					blockNumber: i.blockNumber,
@@ -273,10 +317,16 @@ export async function getGlobalState(
 			});
 
 			await appendCachedArray(protocol, ['global', 'globalG'], arr);
+			await setCachedState(
+				protocol,
+				['global', 'globalG', 'lastFetchedBlock'],
+				e.lastFetchedBlock
+			);
 		}
 	}
 
 	// globalScale
+	progress?.('Retrieving stability pool scale changes');
 	{
 		const cachedLastFetchedBlock = await getCachedState<bigint>(protocol, [
 			'global',
@@ -294,15 +344,20 @@ export async function getGlobalState(
 					? deployBlock
 					: cachedLastFetchedBlock + 1n,
 			toBlock: latestBlock,
-			blockChunkSize: 75_000n,
-			keyPath: ['global', 'globalScale']
+			blockChunkSize: 75_000n
 		});
 
 		for await (const e of globalScale) {
 			if (e === null) break;
 			if (e instanceof Error) throw e;
 
-			const arr = e.map((i) => {
+			await getBlockTimestamps({
+				client,
+				blockNumberToTimestampMap,
+				events: e.events
+			});
+
+			const arr = e.events.map((i) => {
 				return {
 					scale: i.args._currentScale!,
 					blockNumber: i.blockNumber,
@@ -312,10 +367,16 @@ export async function getGlobalState(
 			});
 
 			await appendCachedArray(protocol, ['global', 'globalScale'], arr);
+			await setCachedState(
+				protocol,
+				['global', 'globalScale', 'lastFetchedBlock'],
+				e.lastFetchedBlock
+			);
 		}
 	}
 
 	// globalEpoch
+	progress?.('Retrieving stability pool epoch changes');
 	{
 		const cachedLastFetchedBlock = await getCachedState<bigint>(protocol, [
 			'global',
@@ -333,15 +394,20 @@ export async function getGlobalState(
 					? deployBlock
 					: cachedLastFetchedBlock + 1n,
 			toBlock: latestBlock,
-			blockChunkSize: 75_000n,
-			keyPath: ['global', 'globalEpoch']
+			blockChunkSize: 75_000n
 		});
 
 		for await (const e of globalEpoch) {
 			if (e === null) break;
 			if (e instanceof Error) throw e;
 
-			const arr = e.map((i) => {
+			await getBlockTimestamps({
+				client,
+				blockNumberToTimestampMap,
+				events: e.events
+			});
+
+			const arr = e.events.map((i) => {
 				return {
 					epoch: i.args._currentEpoch!,
 					blockNumber: i.blockNumber,
@@ -351,10 +417,18 @@ export async function getGlobalState(
 			});
 
 			await appendCachedArray(protocol, ['global', 'globalEpoch'], arr);
+			await setCachedState(
+				protocol,
+				['global', 'globalEpoch', 'lastFetchedBlock'],
+				e.lastFetchedBlock
+			);
 		}
 	}
 
 	// globalLTerms
+	progress?.(
+		'Retrieving trove manager L_ETH and L_LUSDDebt (coefficient Sums) accumulator changes'
+	);
 	{
 		const cachedLastFetchedBlock = await getCachedState<bigint>(protocol, [
 			'global',
@@ -372,15 +446,20 @@ export async function getGlobalState(
 					? deployBlock
 					: cachedLastFetchedBlock + 1n,
 			toBlock: latestBlock,
-			blockChunkSize: 75_000n,
-			keyPath: ['global', 'globalLTerms']
+			blockChunkSize: 75_000n
 		});
 
 		for await (const e of globalLTerms) {
 			if (e === null) break;
 			if (e instanceof Error) throw e;
 
-			const arr = e.map((i) => {
+			await getBlockTimestamps({
+				client,
+				blockNumberToTimestampMap,
+				events: e.events
+			});
+
+			const arr = e.events.map((i) => {
 				const _L_ETH = replaceBrandedWordsInString(
 					'_L_ETH',
 					protocols[protocol].modifiers
@@ -414,10 +493,18 @@ export async function getGlobalState(
 			});
 
 			await appendCachedArray(protocol, ['global', 'globalLTerms'], arr);
+			await setCachedState(
+				protocol,
+				['global', 'globalLTerms', 'lastFetchedBlock'],
+				e.lastFetchedBlock
+			);
 		}
 	}
 
 	// globalFEth
+	progress?.(
+		'Retrieving LQTY staking fETH (ETH fee Sum) accumulator changes'
+	);
 	{
 		const cachedLastFetchedBlock = await getCachedState<bigint>(protocol, [
 			'global',
@@ -435,15 +522,20 @@ export async function getGlobalState(
 					? deployBlock
 					: cachedLastFetchedBlock + 1n,
 			toBlock: latestBlock,
-			blockChunkSize: 75_000n,
-			keyPath: ['global', 'globalFEth']
+			blockChunkSize: 75_000n
 		});
 
 		for await (const e of globalFEth) {
 			if (e === null) break;
 			if (e instanceof Error) throw e;
 
-			const arr = e.map((i) => {
+			await getBlockTimestamps({
+				client,
+				blockNumberToTimestampMap,
+				events: e.events
+			});
+
+			const arr = e.events.map((i) => {
 				const _fEth = replaceBrandedWordsInString(
 					'_F_ETH',
 					protocols[protocol].modifiers
@@ -464,10 +556,18 @@ export async function getGlobalState(
 			});
 
 			await appendCachedArray(protocol, ['global', 'globalFEth'], arr);
+			await setCachedState(
+				protocol,
+				['global', 'globalFEth', 'lastFetchedBlock'],
+				e.lastFetchedBlock
+			);
 		}
 	}
 
 	// globalFLusd
+	progress?.(
+		'Retrieving LQTY staking fLUSD (LUSD fee Sum) accumulator changes'
+	);
 	{
 		const cachedLastFetchedBlock = await getCachedState<bigint>(protocol, [
 			'global',
@@ -485,15 +585,20 @@ export async function getGlobalState(
 					? deployBlock
 					: cachedLastFetchedBlock + 1n,
 			toBlock: latestBlock,
-			blockChunkSize: 75_000n,
-			keyPath: ['global', 'globalFLusd']
+			blockChunkSize: 75_000n
 		});
 
 		for await (const e of globalFLusd) {
 			if (e === null) break;
 			if (e instanceof Error) throw e;
 
-			const arr = e.map((i) => {
+			await getBlockTimestamps({
+				client,
+				blockNumberToTimestampMap,
+				events: e.events
+			});
+
+			const arr = e.events.map((i) => {
 				const _fLusd = replaceBrandedWordsInString(
 					'_F_LUSD',
 					protocols[protocol].modifiers
@@ -514,6 +619,11 @@ export async function getGlobalState(
 			});
 
 			await appendCachedArray(protocol, ['global', 'globalFLusd'], arr);
+			await setCachedState(
+				protocol,
+				['global', 'globalFLusd', 'lastFetchedBlock'],
+				e.lastFetchedBlock
+			);
 		}
 	}
 

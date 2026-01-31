@@ -27,7 +27,6 @@ export async function* getContractEventsGenerator<
 	fromBlock,
 	toBlock,
 	blockChunkSize,
-	keyPath
 }: {
 	client: PublicClient;
 	protocol: P;
@@ -37,7 +36,6 @@ export async function* getContractEventsGenerator<
 	fromBlock: bigint;
 	toBlock: bigint;
 	blockChunkSize?: bigint;
-	keyPath: string[];
 }) {
 	const abiItem = getAbiItem(protocol, contract, normalItemName);
 
@@ -58,17 +56,68 @@ export async function* getContractEventsGenerator<
 				toBlock: chunkTo
 			});
 
-			await setCachedState(
-				protocol,
-				[...keyPath, 'lastFetchedBlock'],
-				chunkTo
-			);
-
-			yield chunkedEvents;
+			yield {
+				events: chunkedEvents,
+				lastFetchedBlock: chunkTo
+			};
 		} catch (err) {
 			return err;
 		}
 	}
 
 	return null;
+}
+
+export async function getBlockTimestamps({
+	client,
+	blockNumberToTimestampMap,
+	events
+}: {
+	client: PublicClient;
+	blockNumberToTimestampMap: Map<bigint, bigint>;
+	events: {
+		blockNumber: bigint;
+		blockTimestamp?: bigint | undefined;
+	}[];
+}) {
+	const uniqueBlockNumbers = new Set<bigint>();
+
+	for (const e of events) {
+		if (e.blockTimestamp === undefined) {
+			uniqueBlockNumbers.add(e.blockNumber);
+		}
+	}
+
+	const missingBlockNumbers: bigint[] = [];
+
+	for (const blockNumber of uniqueBlockNumbers) {
+		if (!blockNumberToTimestampMap.has(blockNumber)) {
+			missingBlockNumbers.push(blockNumber);
+		}
+	}
+
+	if (missingBlockNumbers.length > 0) {
+		missingBlockNumbers.sort((a, b) => (a < b ? -1 : 1));
+
+		const batchRequests = missingBlockNumbers.map((bn) => {
+			return client
+				.getBlock({
+					blockNumber: bn,
+					includeTransactions: false
+				})
+				.then((block) => ({ bn, timestamp: block.timestamp }));
+		});
+
+		const batchResponses = await Promise.all(batchRequests);
+
+		for (const { bn, timestamp } of batchResponses) {
+			blockNumberToTimestampMap.set(bn, timestamp);
+		}
+	}
+
+	for (const e of events) {
+		if (e.blockTimestamp === undefined) {
+			e.blockTimestamp = blockNumberToTimestampMap.get(e.blockNumber)!;
+		}
+	}
 }
