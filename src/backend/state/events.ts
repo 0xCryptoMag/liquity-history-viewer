@@ -3,15 +3,24 @@ import type { LiquityContractName } from '../abis/index.js';
 import type { LiquityAbiMap } from '../abis/index.js';
 import type { AllAbiItemNames, GetAbiItem } from '../protocols/modify.js';
 import type {
+	Address,
 	ContractEventArgs,
+	ContractEventName,
 	GetContractEventsReturnType,
 	PublicClient
 } from 'viem';
-import type { GlobalState } from './global.js';
 import { getAbiItem } from '../protocols/modify.js';
 import { protocols } from '../protocols/protocols.js';
+import {
+	appendCachedArray,
+	getCachedArrayLength,
+	getCachedArrayRange,
+	getCachedState,
+	readCachedArray,
+	setCachedState
+} from './cache.js';
+import type { GlobalState } from './global.js';
 import type { UserState } from './user.js';
-import { setCachedState } from './cache.js';
 
 // prettier-ignore
 export async function* getContractEventsGenerator<
@@ -50,7 +59,9 @@ export async function* getContractEventsGenerator<
 			const chunkedEvents = await client.getContractEvents({
 				address: protocols[protocol][contract],
 				abi: [abiItem],
-				eventName: abiItem,
+				eventName: (abiItem as { name: string }).name as ContractEventName<
+					readonly [GetAbiItem<P, C, N>]
+				>,
 				args: args as ContractEventArgs<readonly [GetAbiItem<P, C, N>]>,
 				fromBlock: chunkFrom,
 				toBlock: chunkTo
@@ -120,4 +131,217 @@ export async function getBlockTimestamps({
 			e.blockTimestamp = blockNumberToTimestampMap.get(e.blockNumber)!;
 		}
 	}
+}
+
+type CachedArrayElement<
+	K0 extends 'global' | Address,
+	K1 extends string
+> = K0 extends 'global'
+	? GlobalState[Extract<K1, keyof GlobalState>] extends readonly (infer E)[]
+		? E
+		: never
+	: UserState[Extract<K1, keyof UserState>] extends readonly (infer E)[]
+	? E
+	: never;
+
+export async function getCacheAndTransformEvents<
+	P extends ProtocolName,
+	C extends LiquityContractName,
+	N extends AllAbiItemNames<LiquityAbiMap[C]>,
+	T extends unknown,
+	K0 extends 'global' | Address,
+	K1 extends K0 extends 'global'
+		? Exclude<keyof GlobalState, 'DECIMAL_PRECISION' | 'SCALE_FACTOR'>
+		: keyof UserState
+>({
+	client,
+	protocol,
+	contract,
+	normalItemName,
+	args,
+	latestBlock,
+	blockNumberToTimestampMap,
+	keyPath,
+	transform
+}: {
+	client: PublicClient;
+	protocol: P;
+	contract: C;
+	normalItemName: N;
+	args?: ContractEventArgs<readonly [GetAbiItem<P, C, N>]>;
+	latestBlock: bigint;
+	blockNumberToTimestampMap: Map<bigint, bigint>;
+	keyPath: [K0, K1];
+	transform: (
+		event: GetContractEventsReturnType<
+			readonly [GetAbiItem<P, C, N>]
+		>[number]
+	) => T;
+}) {
+	const cachedLastFetchedBlock = await getCachedState<bigint>(protocol, [
+		...keyPath,
+		'lastFetchedBlock'
+	]);
+
+	const eventsGenerator = getContractEventsGenerator({
+		client,
+		protocol,
+		contract,
+		normalItemName,
+		args,
+		fromBlock:
+			cachedLastFetchedBlock === null
+				? protocols[protocol].deployBlock
+				: cachedLastFetchedBlock + 1n,
+		toBlock: latestBlock,
+		blockChunkSize: 75_000n
+	});
+
+	for await (const e of eventsGenerator) {
+		if (e === null) break;
+		if (e instanceof Error) throw e;
+
+		await getBlockTimestamps({
+			client,
+			blockNumberToTimestampMap,
+			events: e.events
+		});
+
+		const arr = e.events.map(transform);
+
+		await appendCachedArray(protocol, keyPath, arr);
+		await setCachedState(
+			protocol,
+			[...keyPath, 'lastFetchedBlock'],
+			e.lastFetchedBlock
+		);
+	}
+
+	const transformedEvents = await readCachedArray<CachedArrayElement<K0, K1>>(
+		protocol,
+		keyPath
+	);
+
+	return transformedEvents;
+}
+
+type ArrayAndFilter<T extends { blockNumber: bigint }> = {
+	array: T[];
+	filter: (lastBlockNumber: bigint) => (e: T) => boolean;
+};
+
+export async function getBlockNumbersForEvents<
+	T extends { blockNumber: bigint }[]
+>(
+	{
+		protocol,
+		keyPath
+	}: {
+		protocol: ProtocolName;
+		keyPath: string[];
+	},
+	...arraysAndFilters: { [K in keyof T]: ArrayAndFilter<T[K]> }
+) {
+	const cachedArrayLength = await getCachedArrayLength(protocol, keyPath);
+
+	const lastCachedItem = await getCachedArrayRange<T[number]>(
+		protocol,
+		keyPath,
+		cachedArrayLength - 1
+	);
+
+	const blockNumbers = (
+		arraysAndFilters as ArrayAndFilter<T[number]>[]
+	).reduce((acc: bigint[], { array, filter }) => {
+		const blockNumbers = array
+			.filter(filter(lastCachedItem[0]?.blockNumber ?? 0n))
+			.map((e) => e.blockNumber);
+
+		acc.push(...blockNumbers);
+
+		return acc;
+	}, []);
+
+	const sortedUniqueBlockNumbers = Array.from(
+		new Set(blockNumbers.sort((a, b) => (a < b ? -1 : 1)))
+	);
+
+	return sortedUniqueBlockNumbers;
+}
+
+export async function getCacheAndTransformEventsFromBlockNumbers<
+	P extends ProtocolName,
+	C extends LiquityContractName,
+	N extends AllAbiItemNames<LiquityAbiMap[C]>,
+	T extends unknown,
+	K0 extends 'global' | Address,
+	K1 extends K0 extends 'global'
+		? Exclude<keyof GlobalState, 'DECIMAL_PRECISION' | 'SCALE_FACTOR'>
+		: keyof UserState
+>({
+	client,
+	protocol,
+	contract,
+	normalItemName,
+	args,
+	blockNumbers,
+	blockNumberToTimestampMap,
+	keyPath,
+	transform
+}: {
+	client: PublicClient;
+	protocol: P;
+	contract: C;
+	normalItemName: N;
+	args?: ContractEventArgs<readonly [GetAbiItem<P, C, N>]>;
+	blockNumbers: bigint[];
+	blockNumberToTimestampMap: Map<bigint, bigint>;
+	keyPath: [K0, K1];
+	transform: (
+		event: GetContractEventsReturnType<
+			readonly [GetAbiItem<P, C, N>]
+		>[number]
+	) => T;
+}) {
+	const abiItem = getAbiItem(protocol, contract, normalItemName);
+
+	const batchRequests = blockNumbers.map((bn) => {
+		return client.getContractEvents({
+			address: protocols[protocol][contract],
+			abi: [abiItem],
+			eventName: (abiItem as { name: string }).name as ContractEventName<
+				readonly [GetAbiItem<P, C, N>]
+			>,
+			args: args as ContractEventArgs<readonly [GetAbiItem<P, C, N>]>,
+			fromBlock: bn,
+			toBlock: bn
+		});
+	});
+
+	// Grab the first event form the response. For instance,
+	// TroveSnapshotsUpdated may have multiple events that do not correlate to
+	// the user trove (like redemption ops where the user's trove is affected,
+	// but so do a lot of other troves), however they all have the same LTerm
+	// accumulator values so we can just take e[0]
+	// @TODO: If an event does not conform to the above, fix this assumption
+	const events = (await Promise.all(batchRequests))
+		.map((e) => e[0]!)
+		.filter((e) => e !== undefined);
+
+	await getBlockTimestamps({
+		client,
+		blockNumberToTimestampMap,
+		events
+	});
+
+	const arr = events.map(transform);
+
+	await appendCachedArray(protocol, keyPath, arr);
+
+	const transformedEvents = await readCachedArray<CachedArrayElement<K0, K1>>(
+		protocol,
+		keyPath
+	);
+
+	return transformedEvents;
 }

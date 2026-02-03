@@ -2,12 +2,15 @@ export const chains = {
 	mainnet: {
 		name: 'mainnet',
 		weth: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2',
-		rpc: 'https://ethereum-rpc.publicnode.com'
+		rpc: 'https://ethereum-rpc.publicnode.com',
+		blockExplorerTxUrl: 'https://etherscan.io/tx/'
 	},
 	pulsechain: {
 		name: 'pulsechain',
 		weth: '0xA1077a294dDE1B09bB078844df40758a5D0f9a27',
-		rpc: 'https://rpc-pulsechain.g4mm4.io'
+		rpc: 'https://rpc-pulsechain.g4mm4.io',
+		blockExplorerTxUrl:
+			'https://scan.mypinata.cloud/ipfs/bafybeienxyoyrhn5tswclvd3gdjy5mtkkwmu37aqtml6onbf7xnb3o22pe/#/tx/'
 	}
 } as const;
 

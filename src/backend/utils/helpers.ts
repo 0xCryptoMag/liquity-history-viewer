@@ -58,6 +58,33 @@ export function isAfter(
 	return subject.transactionIndex > reference.transactionIndex;
 }
 
+/**
+ * Returns true if subject is between `after` (exclusive unless lowerBounded) and
+ * `before` (exclusive unless upperBounded). The bounded params determine whether
+ * the subject can be in the same transaction as that bound.
+ */
+export function isBetween({
+	subject,
+	before,
+	after,
+	lowerBounded = false,
+	upperBounded = true
+}: {
+	subject: { blockNumber: bigint; transactionIndex: number };
+	before: { blockNumber: bigint; transactionIndex: number };
+	after: { blockNumber: bigint; transactionIndex: number };
+	lowerBounded?: boolean;
+	upperBounded?: boolean;
+}) {
+	const afterLower = lowerBounded
+		? isAfter(subject, after) || isSameTxn(subject, after)
+		: isAfter(subject, after);
+	const beforeUpper = upperBounded
+		? isBefore(subject, before) || isSameTxn(subject, before)
+		: isBefore(subject, before);
+	return afterLower && beforeUpper;
+}
+
 export async function getContractEvents<
 	P extends ProtocolName,
 	C extends LiquityContractName & keyof (typeof protocols)[P],

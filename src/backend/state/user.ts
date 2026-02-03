@@ -1,4 +1,4 @@
-import type { Address, PublicClient } from 'viem';
+import type { Address, Hash, PublicClient } from 'viem';
 import type { ProtocolName } from '../protocols/protocols.js';
 import type { ReplaceBrandedWordsInStringForAllProtocols } from '../protocols/rebrand.js';
 import type { ExtractUnionValue } from '../utils/helpers.js';
@@ -6,19 +6,17 @@ import {
 	borrowerOperationEnum,
 	troveManagerOperationEnum
 } from '../protocols/enums.js';
-import {
-	appendCachedArray,
-	readCachedArray,
-	getCachedState,
-	setCachedState
-} from './cache.js';
 import { protocols } from '../protocols/protocols.js';
 import { replaceBrandedWordsInString } from '../protocols/rebrand.js';
-import { getContractEventsGenerator, getBlockTimestamps } from './events.js';
+import {
+	getCacheAndTransformEvents,
+	getCacheAndTransformEventsFromBlockNumbers,
+	getBlockNumbersForEvents
+} from './events.js';
 
 export type UserState = {
 	// Borrower Operations
-	troveBorrowerOperations: {
+	userTroveUpdates: {
 		coll: bigint;
 		debt: bigint;
 		stake: bigint;
@@ -26,40 +24,45 @@ export type UserState = {
 		blockNumber: bigint;
 		transactionIndex: number;
 		timestamp: bigint;
+		transactionHash: Hash;
 	}[];
 
 	// Coll Surplus Pool
-	collBalance: {
+	collSurplusBalance: {
 		surplus: bigint;
 		blockNumber: bigint;
 		transactionIndex: number;
 		timestamp: bigint;
+		transactionHash: Hash;
 	}[];
 
 	// Stability Pool
-	depositorSnapshots: {
+	depositUpdates: {
+		deposit: bigint;
+		blockNumber: bigint;
+		transactionIndex: number;
+		timestamp: bigint;
+		transactionHash: Hash;
+	}[];
+	PSGSnapshots: {
 		P: bigint;
 		S: bigint;
 		G: bigint;
 		blockNumber: bigint;
 		transactionIndex: number;
 		timestamp: bigint;
+		transactionHash: Hash;
 	}[];
-	depositedLusd: {
-		deposit: bigint;
-		blockNumber: bigint;
-		transactionIndex: number;
-		timestamp: bigint;
-	}[];
-	frontEndTag: {
+	frontEndTagChanges: {
 		frontEndTag: Address;
 		blockNumber: bigint;
 		transactionIndex: number;
 		timestamp: bigint;
+		transactionHash: Hash;
 	}[];
 
 	// Trove Manager
-	troveTroveManager: {
+	systemTroveUpdates: {
 		debt: bigint;
 		coll: bigint;
 		stake: bigint;
@@ -67,22 +70,32 @@ export type UserState = {
 		blockNumber: bigint;
 		transactionIndex: number;
 		timestamp: bigint;
+		transactionHash: Hash;
+	}[];
+	LTermsSnapshots: {
+		lEth: bigint;
+		lLusd: bigint;
+		blockNumber: bigint;
+		transactionIndex: number;
+		timestamp: bigint;
+		transactionHash: Hash;
 	}[];
 
 	// LQTY Staking
-	stakedLqty: {
+	stakeUpdates: {
 		stake: bigint;
 		blockNumber: bigint;
 		transactionIndex: number;
 		timestamp: bigint;
+		transactionHash: Hash;
 	}[];
-	stakerSnapshots: {
-		// staker not indexed, filter for it
+	FTermsSnapshots: {
 		fEth: bigint;
 		fLusd: bigint;
 		blockNumber: bigint;
 		transactionIndex: number;
 		timestamp: bigint;
+		transactionHash: Hash;
 	}[];
 };
 
@@ -93,538 +106,374 @@ export async function getUserState(
 	blockNumberToTimestampMap: Map<bigint, bigint>,
 	progress?: (key: string) => void
 ): Promise<UserState> {
-	const { deployBlock } = protocols[protocol];
-
 	const latestBlock = await client.getBlockNumber();
 
-	// troveBorrowerOperations
+	const commonArgs = {
+		client,
+		protocol,
+		latestBlock,
+		blockNumberToTimestampMap
+	} as const;
+
+	/** ------------------------------------------------------------------------
+	 * userTroveUpdates
+	 ------------------------------------------------------------------------ */
 	progress?.('Retrieving user initiated trove changes');
-	{
-		const cachedLastFetchedBlock = await getCachedState<bigint>(protocol, [
-			userAddress,
-			'troveBorrowerOperations',
-			'lastFetchedBlock'
-		]);
-
-		const troveBorrowerOperations = getContractEventsGenerator({
-			client,
-			protocol,
-			contract: 'borrowerOperations',
-			normalItemName: 'TroveUpdated',
-			args: {
-				_borrower: userAddress
-			},
-			fromBlock:
-				cachedLastFetchedBlock === null
-					? deployBlock
-					: cachedLastFetchedBlock + 1n,
-			toBlock: latestBlock,
-			blockChunkSize: 75_000n
-		});
-
-		for await (const e of troveBorrowerOperations) {
-			if (e === null) break;
-			if (e instanceof Error) throw e;
-
-			await getBlockTimestamps({
-				client,
-				blockNumberToTimestampMap,
-				events: e.events
-			});
-
-			const arr = e.events.map((i) => {
-				return {
-					coll: i.args._coll!,
-					debt: i.args._debt!,
-					stake: i.args.stake!,
-					operation: borrowerOperationEnum[i.args.operation!]!,
-					blockNumber: i.blockNumber,
-					transactionIndex: i.transactionIndex,
-					timestamp: i.blockTimestamp!
-				};
-			});
-
-			await appendCachedArray(
-				protocol,
-				[userAddress, 'troveBorrowerOperations'],
-				arr
-			);
-			await setCachedState(
-				protocol,
-				[userAddress, 'troveBorrowerOperations', 'lastFetchedBlock'],
-				e.lastFetchedBlock
-			);
+	const userTroveUpdates = await getCacheAndTransformEvents({
+		...commonArgs,
+		contract: 'borrowerOperations',
+		normalItemName: 'TroveUpdated',
+		args: {
+			_borrower: userAddress
+		},
+		keyPath: [userAddress, 'userTroveUpdates'],
+		transform: (e) => {
+			return {
+				coll: e.args._coll!,
+				debt: e.args._debt!,
+				stake: e.args.stake!,
+				operation: borrowerOperationEnum[e.args.operation!]!,
+				blockNumber: e.blockNumber,
+				transactionIndex: e.transactionIndex,
+				timestamp: e.blockTimestamp!,
+				transactionHash: e.transactionHash
+			};
 		}
-	}
+	});
 
-	// collBalance
+	/** ------------------------------------------------------------------------
+	 * collSurplusBalance
+	 ------------------------------------------------------------------------ */
 	progress?.(
 		'Retrieving user coll surplus from redeem to close and certain recovery mode liquidations'
 	);
-	{
-		const cachedLastFetchedBlock = await getCachedState<bigint>(protocol, [
-			userAddress,
-			'collBalance',
-			'lastFetchedBlock'
-		]);
-
-		const collBalance = getContractEventsGenerator({
-			client,
-			protocol,
-			contract: 'collSurplusPool',
-			normalItemName: 'CollBalanceUpdated',
-			args: {
-				_account: userAddress
-			},
-			fromBlock:
-				cachedLastFetchedBlock === null
-					? deployBlock
-					: cachedLastFetchedBlock + 1n,
-			toBlock: latestBlock,
-			blockChunkSize: 75_000n
-		});
-
-		for await (const e of collBalance) {
-			if (e === null) break;
-			if (e instanceof Error) throw e;
-
-			await getBlockTimestamps({
-				client,
-				blockNumberToTimestampMap,
-				events: e.events
-			});
-
-			const arr = e.events.map((i) => {
-				return {
-					surplus: i.args._newBalance!,
-					blockNumber: i.blockNumber,
-					transactionIndex: i.transactionIndex,
-					timestamp: i.blockTimestamp!
-				};
-			});
-
-			await appendCachedArray(
-				protocol,
-				[userAddress, 'collBalance'],
-				arr
-			);
-			await setCachedState(
-				protocol,
-				[userAddress, 'collBalance', 'lastFetchedBlock'],
-				e.lastFetchedBlock
-			);
+	const collSurplusBalance = await getCacheAndTransformEvents({
+		...commonArgs,
+		contract: 'collSurplusPool',
+		normalItemName: 'CollBalanceUpdated',
+		args: {
+			_account: userAddress
+		},
+		keyPath: [userAddress, 'collSurplusBalance'],
+		transform: (e) => {
+			return {
+				surplus: e.args._newBalance!,
+				blockNumber: e.blockNumber,
+				transactionIndex: e.transactionIndex,
+				timestamp: e.blockTimestamp!,
+				transactionHash: e.transactionHash
+			};
 		}
-	}
+	});
 
-	// depositorSnapshots
-	progress?.(
-		'Retrieving user stability pool deposit P, S and G accumulator snapshots'
-	);
-	{
-		const cachedLastFetchedBlock = await getCachedState<bigint>(protocol, [
-			userAddress,
-			'depositorSnapshots',
-			'lastFetchedBlock'
-		]);
-
-		const depositorSnapshots = getContractEventsGenerator({
-			client,
-			protocol,
-			contract: 'stabilityPool',
-			normalItemName: 'DepositSnapshotUpdated',
-			args: {
-				_depositor: userAddress
-			},
-			fromBlock:
-				cachedLastFetchedBlock === null
-					? deployBlock
-					: cachedLastFetchedBlock + 1n,
-			toBlock: latestBlock,
-			blockChunkSize: 75_000n
-		});
-
-		for await (const e of depositorSnapshots) {
-			if (e === null) break;
-			if (e instanceof Error) throw e;
-
-			await getBlockTimestamps({
-				client,
-				blockNumberToTimestampMap,
-				events: e.events
-			});
-
-			const arr = e.events.map((i) => {
-				return {
-					P: i.args._P!,
-					S: i.args._S!,
-					G: i.args._G!,
-					blockNumber: i.blockNumber,
-					transactionIndex: i.transactionIndex,
-					timestamp: i.blockTimestamp!
-				};
-			});
-
-			await appendCachedArray(
-				protocol,
-				[userAddress, 'depositorSnapshots'],
-				arr
-			);
-			await setCachedState(
-				protocol,
-				[userAddress, 'depositorSnapshots', 'lastFetchedBlock'],
-				e.lastFetchedBlock
-			);
-		}
-	}
-
-	// depositedLusd
+	/** ------------------------------------------------------------------------
+	 * depositUpdates
+	 ------------------------------------------------------------------------ */
 	progress?.(
 		'Retrieving user stability pool deposit and withdrawal LUSD changes'
 	);
-	{
-		const cachedLastFetchedBlock = await getCachedState<bigint>(protocol, [
-			userAddress,
-			'depositedLusd',
-			'lastFetchedBlock'
-		]);
-
-		const depositedLusd = getContractEventsGenerator({
-			client,
-			protocol,
-			contract: 'stabilityPool',
-			normalItemName: 'UserDepositChanged',
-			args: {
-				_depositor: userAddress
-			},
-			fromBlock:
-				cachedLastFetchedBlock === null
-					? deployBlock
-					: cachedLastFetchedBlock + 1n,
-			toBlock: latestBlock,
-			blockChunkSize: 75_000n
-		});
-
-		for await (const e of depositedLusd) {
-			if (e === null) break;
-			if (e instanceof Error) throw e;
-
-			await getBlockTimestamps({
-				client,
-				blockNumberToTimestampMap,
-				events: e.events
-			});
-
-			const arr = e.events.map((i) => {
-				return {
-					deposit: i.args._newDeposit!,
-					blockNumber: i.blockNumber,
-					transactionIndex: i.transactionIndex,
-					timestamp: i.blockTimestamp!
-				};
-			});
-
-			await appendCachedArray(
-				protocol,
-				[userAddress, 'depositedLusd'],
-				arr
-			);
-			await setCachedState(
-				protocol,
-				[userAddress, 'depositedLusd', 'lastFetchedBlock'],
-				e.lastFetchedBlock
-			);
+	const depositUpdates = await getCacheAndTransformEvents({
+		...commonArgs,
+		contract: 'stabilityPool',
+		normalItemName: 'UserDepositChanged',
+		args: {
+			_depositor: userAddress
+		},
+		keyPath: [userAddress, 'depositUpdates'],
+		transform: (e) => {
+			return {
+				deposit: e.args._newDeposit!,
+				blockNumber: e.blockNumber,
+				transactionIndex: e.transactionIndex,
+				timestamp: e.blockTimestamp!,
+				transactionHash: e.transactionHash
+			};
 		}
-	}
+	});
 
-	// frontEndTag
-	progress?.('Retrieving user stability pool front end tag changes');
-	{
-		const cachedLastFetchedBlock = await getCachedState<bigint>(protocol, [
-			userAddress,
-			'frontEndTag',
-			'lastFetchedBlock'
-		]);
-
-		const frontEndTag = getContractEventsGenerator({
-			client,
+	/** ------------------------------------------------------------------------
+	 * PSGSnapshots
+	 ------------------------------------------------------------------------ */
+	progress?.(
+		'Retrieving user stability pool deposit P, S and G accumulator snapshots'
+	);
+	const PSGSnapshotsBlockNumbers = await getBlockNumbersForEvents(
+		{
 			protocol,
+			keyPath: [userAddress, 'PSGSnapshots']
+		},
+		{
+			array: depositUpdates,
+			filter: (lastBlockNumber: bigint) => {
+				return (e: UserState['depositUpdates'][number]) => {
+					return e.blockNumber > lastBlockNumber;
+				};
+			}
+		}
+	);
+
+	const PSGSnapshots = await getCacheAndTransformEventsFromBlockNumbers({
+		...commonArgs,
+		contract: 'stabilityPool',
+		normalItemName: 'DepositSnapshotUpdated',
+		args: {
+			_depositor: userAddress
+		},
+		blockNumbers: PSGSnapshotsBlockNumbers,
+		blockNumberToTimestampMap,
+		keyPath: [userAddress, 'PSGSnapshots'],
+		transform: (e) => {
+			return {
+				P: e.args._P!,
+				S: e.args._S!,
+				G: e.args._G!,
+				blockNumber: e.blockNumber,
+				transactionIndex: e.transactionIndex,
+				timestamp: e.blockTimestamp!,
+				transactionHash: e.transactionHash
+			};
+		}
+	});
+
+	/** ------------------------------------------------------------------------
+	 * frontEndTagChanges
+	 ------------------------------------------------------------------------ */
+	progress?.('Retrieving user stability pool front end tag changes');
+	const frontEndTagChangesBlockNumbers = await getBlockNumbersForEvents(
+		{
+			protocol,
+			keyPath: [userAddress, 'frontEndTagChanges']
+		},
+		{
+			array: depositUpdates,
+			filter: (lastBlockNumber: bigint) => {
+				return (e: UserState['depositUpdates'][number]) => {
+					return e.blockNumber > lastBlockNumber;
+				};
+			}
+		}
+	);
+
+	const frontEndTagChanges = await getCacheAndTransformEventsFromBlockNumbers(
+		{
+			...commonArgs,
 			contract: 'stabilityPool',
 			normalItemName: 'FrontEndTagSet',
 			args: {
 				_depositor: userAddress
 			},
-			fromBlock:
-				cachedLastFetchedBlock === null
-					? deployBlock
-					: cachedLastFetchedBlock + 1n,
-			toBlock: latestBlock,
-			blockChunkSize: 75_000n
-		});
-
-		for await (const e of frontEndTag) {
-			if (e === null) break;
-			if (e instanceof Error) throw e;
-
-			await getBlockTimestamps({
-				client,
-				blockNumberToTimestampMap,
-				events: e.events
-			});
-
-			const arr = e.events.map((i) => {
+			blockNumbers: frontEndTagChangesBlockNumbers,
+			blockNumberToTimestampMap,
+			keyPath: [userAddress, 'frontEndTagChanges'],
+			transform: (e) => {
 				return {
-					frontEndTag: i.args._frontEnd!,
-					blockNumber: i.blockNumber,
-					transactionIndex: i.transactionIndex,
-					timestamp: i.blockTimestamp!
+					frontEndTag: e.args._frontEnd!,
+					blockNumber: e.blockNumber,
+					transactionIndex: e.transactionIndex,
+					timestamp: e.blockTimestamp!,
+					transactionHash: e.transactionHash
 				};
-			});
-
-			await appendCachedArray(
-				protocol,
-				[userAddress, 'frontEndTag'],
-				arr
-			);
-			await setCachedState(
-				protocol,
-				[userAddress, 'frontEndTag', 'lastFetchedBlock'],
-				e.lastFetchedBlock
-			);
+			}
 		}
-	}
+	);
 
-	// troveTroveManager
+	/** ------------------------------------------------------------------------
+	 * systemTroveUpdates
+	 ------------------------------------------------------------------------ */
 	progress?.('Retrieving user trove changes from trove manager');
-	{
-		const cachedLastFetchedBlock = await getCachedState<bigint>(protocol, [
-			userAddress,
-			'troveTroveManager',
-			'lastFetchedBlock'
-		]);
-
-		const troveTroveManager = getContractEventsGenerator({
-			client,
-			protocol,
-			contract: 'troveManager',
-			normalItemName: 'TroveUpdated',
-			args: {
-				_borrower: userAddress
-			},
-			fromBlock:
-				cachedLastFetchedBlock === null
-					? deployBlock
-					: cachedLastFetchedBlock + 1n,
-			toBlock: latestBlock,
-			blockChunkSize: 75_000n
-		});
-
-		for await (const e of troveTroveManager) {
-			if (e === null) break;
-			if (e instanceof Error) throw e;
-
-			await getBlockTimestamps({
-				client,
-				blockNumberToTimestampMap,
-				events: e.events
-			});
-
-			const arr = e.events.map((i) => {
-				return {
-					debt: i.args._debt!,
-					coll: i.args._coll!,
-					stake: i.args._stake!,
-					operation: troveManagerOperationEnum[i.args._operation!]!,
-					blockNumber: i.blockNumber,
-					transactionIndex: i.transactionIndex,
-					timestamp: i.blockTimestamp!
-				};
-			});
-
-			await appendCachedArray(
-				protocol,
-				[userAddress, 'troveTroveManager'],
-				arr
-			);
-			await setCachedState(
-				protocol,
-				[userAddress, 'troveTroveManager', 'lastFetchedBlock'],
-				e.lastFetchedBlock
-			);
+	const systemTroveUpdates = await getCacheAndTransformEvents({
+		...commonArgs,
+		contract: 'troveManager',
+		normalItemName: 'TroveUpdated',
+		args: {
+			_borrower: userAddress
+		},
+		keyPath: [userAddress, 'systemTroveUpdates'],
+		transform: (e) => {
+			return {
+				debt: e.args._debt!,
+				coll: e.args._coll!,
+				stake: e.args._stake!,
+				operation: troveManagerOperationEnum[e.args._operation!]!,
+				blockNumber: e.blockNumber,
+				transactionIndex: e.transactionIndex,
+				timestamp: e.blockTimestamp!,
+				transactionHash: e.transactionHash
+			};
 		}
-	}
+	});
 
-	// stakedLqty
+	/** ------------------------------------------------------------------------
+	 * LTermsSnapshots
+	 ------------------------------------------------------------------------ */
+	progress?.('Retrieving user trove LTerm snapshots');
+	const LTermsSnapshotsBlockNumbers = await getBlockNumbersForEvents(
+		{
+			protocol,
+			keyPath: [userAddress, 'LTermsSnapshots']
+		},
+		{
+			array: systemTroveUpdates,
+			filter: (lastBlockNumber: bigint) => {
+				return (e: UserState['systemTroveUpdates'][number]) => {
+					return (
+						e.blockNumber > lastBlockNumber &&
+						e.operation === 'applyPendingRewards'
+					);
+				};
+			}
+		},
+		{
+			array: userTroveUpdates,
+			filter: (lastBlockNumber: bigint) => {
+				return (e: UserState['userTroveUpdates'][number]) => {
+					return (
+						e.blockNumber > lastBlockNumber &&
+						e.operation === 'openTrove'
+					);
+				};
+			}
+		}
+	);
+
+	const LTermsSnapshots = await getCacheAndTransformEventsFromBlockNumbers({
+		...commonArgs,
+		contract: 'troveManager',
+		normalItemName: 'TroveSnapshotsUpdated',
+		blockNumbers: LTermsSnapshotsBlockNumbers,
+		blockNumberToTimestampMap,
+		keyPath: [userAddress, 'LTermsSnapshots'],
+		transform: (e) => {
+			const _L_ETH = replaceBrandedWordsInString(
+				'_L_ETH',
+				protocols[protocol].modifiers
+			) as ReplaceBrandedWordsInStringForAllProtocols<'_L_ETH'>;
+
+			const lEth = e.args[
+				_L_ETH as keyof typeof e.args
+			] as ExtractUnionValue<
+				typeof e.args,
+				ReplaceBrandedWordsInStringForAllProtocols<'_L_ETH'>
+			>;
+
+			const _L_LUSDDebt = replaceBrandedWordsInString(
+				'_L_LUSDDebt',
+				protocols[protocol].modifiers
+			) as ReplaceBrandedWordsInStringForAllProtocols<'_L_LUSDDebt'>;
+			const lLusd = e.args[
+				_L_LUSDDebt as keyof typeof e.args
+			] as ExtractUnionValue<
+				typeof e.args,
+				ReplaceBrandedWordsInStringForAllProtocols<'_L_LUSDDebt'>
+			>;
+
+			return {
+				lEth: lEth!,
+				lLusd: lLusd!,
+				blockNumber: e.blockNumber,
+				transactionIndex: e.transactionIndex,
+				timestamp: e.blockTimestamp!,
+				transactionHash: e.transactionHash
+			};
+		}
+	});
+
+	/** ------------------------------------------------------------------------
+	 * stakeUpdates
+	 ------------------------------------------------------------------------ */
 	progress?.('Retrieving user LQTY staking stake changes');
-	{
-		const cachedLastFetchedBlock = await getCachedState<bigint>(protocol, [
-			userAddress,
-			'stakedLqty',
-			'lastFetchedBlock'
-		]);
-
-		const stakeChanged = getContractEventsGenerator({
-			client,
-			protocol,
-			contract: 'lqtyStaking',
-			normalItemName: 'StakeChanged',
-			args: {
-				staker: userAddress
-			},
-			fromBlock:
-				cachedLastFetchedBlock === null
-					? deployBlock
-					: cachedLastFetchedBlock + 1n,
-			toBlock: latestBlock,
-			blockChunkSize: 75_000n
-		});
-
-		for await (const e of stakeChanged) {
-			if (e === null) break;
-			if (e instanceof Error) throw e;
-
-			await getBlockTimestamps({
-				client,
-				blockNumberToTimestampMap,
-				events: e.events
-			});
-
-			const arr = e.events.map((i) => {
-				return {
-					stake: i.args.newStake!,
-					blockNumber: i.blockNumber,
-					transactionIndex: i.transactionIndex,
-					timestamp: i.blockTimestamp!
-				};
-			});
-
-			await appendCachedArray(protocol, [userAddress, 'stakedLqty'], arr);
-			await setCachedState(
-				protocol,
-				[userAddress, 'stakedLqty', 'lastFetchedBlock'],
-				e.lastFetchedBlock
-			);
+	const stakeUpdates = await getCacheAndTransformEvents({
+		...commonArgs,
+		contract: 'lqtyStaking',
+		normalItemName: 'StakeChanged',
+		args: {
+			staker: userAddress
+		},
+		keyPath: [userAddress, 'stakeUpdates'],
+		transform: (e) => {
+			return {
+				stake: e.args.newStake!,
+				blockNumber: e.blockNumber,
+				transactionIndex: e.transactionIndex,
+				timestamp: e.blockTimestamp!,
+				transactionHash: e.transactionHash
+			};
 		}
-	}
+	});
 
-	// stakerSnapshots
+	/** ------------------------------------------------------------------------
+	 * FTermsSnapshots
+	 ------------------------------------------------------------------------ */
 	progress?.(
 		'Retrieving user LQTY staking fETH and fLUSD accumulator snapshots'
 	);
-	{
-		const cachedLastFetchedBlock = await getCachedState<bigint>(protocol, [
-			userAddress,
-			'stakerSnapshots',
-			'lastFetchedBlock'
-		]);
-
-		const stakerSnapshots = getContractEventsGenerator({
-			client,
+	const FTermsSnapshotsBlockNumbers = await getBlockNumbersForEvents(
+		{
 			protocol,
-			contract: 'lqtyStaking',
-			normalItemName: 'StakerSnapshotsUpdated',
-			fromBlock:
-				cachedLastFetchedBlock === null
-					? deployBlock
-					: cachedLastFetchedBlock + 1n,
-			toBlock: latestBlock,
-			blockChunkSize: 75_000n
-		});
-
-		for await (const e of stakerSnapshots) {
-			if (e === null) break;
-			if (e instanceof Error) throw e;
-
-			await getBlockTimestamps({
-				client,
-				blockNumberToTimestampMap,
-				events: e.events
-			});
-
-			const arr = e.events
-				.filter((i) => i.args._staker === userAddress)
-				.map((i) => {
-					const _F_ETH = replaceBrandedWordsInString(
-						'_F_ETH',
-						protocols[protocol].modifiers
-					) as ReplaceBrandedWordsInStringForAllProtocols<'_F_ETH'>;
-
-					const fEth = i.args[
-						_F_ETH as keyof typeof i.args
-					] as ExtractUnionValue<
-						typeof i.args,
-						ReplaceBrandedWordsInStringForAllProtocols<'_F_ETH'>
-					>;
-
-					const _F_LUSD = replaceBrandedWordsInString(
-						'_F_LUSD',
-						protocols[protocol].modifiers
-					) as ReplaceBrandedWordsInStringForAllProtocols<'_F_LUSD'>;
-
-					const fLusd = i.args[
-						_F_LUSD as keyof typeof i.args
-					] as ExtractUnionValue<
-						typeof i.args,
-						ReplaceBrandedWordsInStringForAllProtocols<'_F_LUSD'>
-					>;
-
-					return {
-						fEth: fEth!,
-						fLusd: fLusd!,
-						blockNumber: i.blockNumber,
-						transactionIndex: i.transactionIndex,
-						timestamp: i.blockTimestamp!
-					};
-				});
-
-			await appendCachedArray(
-				protocol,
-				[userAddress, 'stakerSnapshots'],
-				arr
-			);
-			await setCachedState(
-				protocol,
-				[userAddress, 'stakerSnapshots', 'lastFetchedBlock'],
-				e.lastFetchedBlock
-			);
+			keyPath: [userAddress, 'FTermsSnapshots']
+		},
+		{
+			array: stakeUpdates,
+			filter: (lastBlockNumber: bigint) => {
+				return (e: UserState['stakeUpdates'][number]) => {
+					return e.blockNumber > lastBlockNumber;
+				};
+			}
 		}
-	}
+	);
 
-	const troveBorrowerOperations = await readCachedArray<
-		UserState['troveBorrowerOperations'][number]
-	>(protocol, [userAddress, 'troveBorrowerOperations']);
-	const collBalance = await readCachedArray<UserState['collBalance'][number]>(
-		protocol,
-		[userAddress, 'collBalance']
-	);
-	const depositorSnapshots = await readCachedArray<
-		UserState['depositorSnapshots'][number]
-	>(protocol, [userAddress, 'depositorSnapshots']);
-	const depositedLusd = await readCachedArray<
-		UserState['depositedLusd'][number]
-	>(protocol, [userAddress, 'depositedLusd']);
-	const frontEndTag = await readCachedArray<UserState['frontEndTag'][number]>(
-		protocol,
-		[userAddress, 'frontEndTag']
-	);
-	const troveTroveManager = await readCachedArray<
-		UserState['troveTroveManager'][number]
-	>(protocol, [userAddress, 'troveTroveManager']);
-	const stakedLqty = await readCachedArray<UserState['stakedLqty'][number]>(
-		protocol,
-		[userAddress, 'stakedLqty']
-	);
-	const stakerSnapshots = await readCachedArray<
-		UserState['stakerSnapshots'][number]
-	>(protocol, [userAddress, 'stakerSnapshots']);
+	const FTermsSnapshots = await getCacheAndTransformEventsFromBlockNumbers({
+		...commonArgs,
+		contract: 'lqtyStaking',
+		normalItemName: 'StakerSnapshotsUpdated',
+		blockNumbers: FTermsSnapshotsBlockNumbers,
+		blockNumberToTimestampMap,
+		keyPath: [userAddress, 'FTermsSnapshots'],
+		transform: (e) => {
+			const _F_ETH = replaceBrandedWordsInString(
+				'_F_ETH',
+				protocols[protocol].modifiers
+			) as ReplaceBrandedWordsInStringForAllProtocols<'_F_ETH'>;
+
+			const fEth = e.args[
+				_F_ETH as keyof typeof e.args
+			] as ExtractUnionValue<
+				typeof e.args,
+				ReplaceBrandedWordsInStringForAllProtocols<'_F_ETH'>
+			>;
+
+			const _F_LUSD = replaceBrandedWordsInString(
+				'_F_LUSD',
+				protocols[protocol].modifiers
+			) as ReplaceBrandedWordsInStringForAllProtocols<'_F_LUSD'>;
+
+			const fLusd = e.args[
+				_F_LUSD as keyof typeof e.args
+			] as ExtractUnionValue<
+				typeof e.args,
+				ReplaceBrandedWordsInStringForAllProtocols<'_F_LUSD'>
+			>;
+
+			return {
+				fEth: fEth!,
+				fLusd: fLusd!,
+				blockNumber: e.blockNumber,
+				transactionIndex: e.transactionIndex,
+				timestamp: e.blockTimestamp!,
+				transactionHash: e.transactionHash
+			};
+		}
+	});
 
 	return {
-		troveBorrowerOperations,
-		collBalance,
-		depositorSnapshots,
-		depositedLusd,
-		frontEndTag,
-		troveTroveManager,
-		stakedLqty,
-		stakerSnapshots
+		userTroveUpdates,
+		collSurplusBalance,
+		depositUpdates,
+		PSGSnapshots,
+		frontEndTagChanges,
+		systemTroveUpdates,
+		LTermsSnapshots,
+		stakeUpdates,
+		FTermsSnapshots
 	};
 }

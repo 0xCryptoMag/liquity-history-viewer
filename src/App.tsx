@@ -6,31 +6,37 @@ import type {
 	TimelineOptions as TimelineOptionsType
 } from './backend/state/timeline.js';
 import {
-	listCacheKeyPathsForDisplay,
-	clearCachedStateForBaseKey,
-	clearCachedState,
-	type DisplayCacheEntry,
-	type ListCacheEntriesFilter
-} from './backend/state/cache.js';
-import {
 	protocolNames,
+	protocols,
 	type ProtocolName
 } from './backend/protocols/protocols.js';
 import { CacheManager } from './CacheManager';
 import './index.css';
 
-const DECIMALS = 18n;
-
-function formatBigInt(value: bigint, decimals: number = 18): string {
-	const divisor = 10n ** BigInt(decimals);
-	const intPart = value / divisor;
-	const fracPart = value % divisor;
+function formatBigInt(value: bigint, precision: bigint): string {
+	const intPart = value / precision;
+	const fracPart = value % precision;
 	if (fracPart === 0n) return intPart.toString();
+	const decimals = precision.toString().length - 1;
 	const fracStr = fracPart
 		.toString()
 		.padStart(decimals, '0')
 		.replace(/0+$/, '');
 	return `${intPart}.${fracStr}`;
+}
+
+function formatTimestamp(timestamp: bigint): string {
+	const d = new Date(Number(timestamp) * 1000);
+	const month = d.toLocaleString('en-US', { month: 'short' });
+	const day = d.getDate().toString().padStart(2, '0');
+	const year = d.getFullYear();
+	const hour = d.getHours();
+	const ampm = hour >= 12 ? 'PM' : 'AM';
+	const hour12 = hour % 12 || 12;
+	const h = hour12.toString().padStart(2, '0');
+	const min = d.getMinutes().toString().padStart(2, '0');
+	const sec = d.getSeconds().toString().padStart(2, '0');
+	return `${month} ${day}, ${year} ${h}:${min}:${sec} ${ampm}`;
 }
 
 function serializeTimelineToJson(timeline: Timeline): string {
@@ -50,7 +56,7 @@ function serializeTimelineToJson(timeline: Timeline): string {
 				...e,
 				deposit: e.deposit.toString(),
 				pendingEthGain: e.pendingEthGain.toString(),
-				pendingDepositLoss: e.pendingDepositLoss.toString(),
+				pendingLusdLoss: e.pendingLusdLoss.toString(),
 				pendingLqtyReward: e.pendingLqtyReward.toString(),
 				blockNumber: e.blockNumber.toString(),
 				timestamp: e.timestamp.toString()
@@ -105,6 +111,9 @@ export function App() {
 	const [loading, setLoading] = useState(false);
 	const [progress, setProgress] = useState<string | null>(null);
 	const [timeline, setTimeline] = useState<Timeline | null>(null);
+	const [decimalPrecision, setDecimalPrecision] = useState<bigint | null>(
+		null
+	);
 	const [error, setError] = useState<string | null>(null);
 
 	const refreshCacheList = useCallback(() => {
@@ -123,6 +132,7 @@ export function App() {
 		setLoading(true);
 		setError(null);
 		setTimeline(null);
+		setDecimalPrecision(null);
 		setProgress(null);
 		try {
 			const result = await constructTimeline(
@@ -131,7 +141,8 @@ export function App() {
 				options,
 				(msg) => setProgress(msg)
 			);
-			setTimeline(result);
+			setTimeline(result.timeline);
+			setDecimalPrecision(result.decimalPrecision);
 			setProgress(null);
 			refreshCacheList();
 		} catch (err) {
@@ -335,7 +346,7 @@ export function App() {
 						</div>
 					)}
 
-					{timeline && (
+					{timeline && decimalPrecision !== null && (
 						<div className='flex flex-col gap-4'>
 							<div className='flex justify-end'>
 								<button
@@ -348,7 +359,11 @@ export function App() {
 									Download timeline (JSON)
 								</button>
 							</div>
-							<TimelineView timeline={timeline} />
+							<TimelineView
+								timeline={timeline}
+								decimalPrecision={decimalPrecision}
+								protocol={protocol}
+							/>
 						</div>
 					)}
 				</div>
@@ -365,10 +380,111 @@ export function App() {
 	);
 }
 
-function TimelineView({ timeline }: { timeline: Timeline }) {
+const PAGE_SIZE_OPTIONS = [25, 50, 100] as const;
+
+function PaginationControls({
+	page,
+	setPage,
+	pageSize,
+	setPageSize,
+	totalPages
+}: {
+	page: number;
+	setPage: (n: number | ((p: number) => number)) => void;
+	pageSize: 25 | 50 | 100;
+	setPageSize: (n: 25 | 50 | 100) => void;
+	totalPages: number;
+}) {
+	const currentPage = Math.min(page, Math.max(1, totalPages));
+	const [goToInput, setGoToInput] = useState('');
+
+	const handleGoToPage = () => {
+		const n = parseInt(goToInput, 10);
+		if (!Number.isNaN(n)) {
+			setPage(Math.max(1, Math.min(totalPages, n)));
+			setGoToInput('');
+		}
+	};
+
+	return (
+		<div className='flex flex-wrap items-center gap-4'>
+			<span className='text-[#fbf0df]/80 text-sm'>Per page:</span>
+			{PAGE_SIZE_OPTIONS.map((n) => (
+				<button
+					key={n}
+					type='button'
+					onClick={() => {
+						setPageSize(n);
+						setPage(1);
+					}}
+					className={`px-2 py-1 rounded text-sm font-medium ${
+						pageSize === n
+							? 'bg-[#fbf0df] text-[#1a1a1a]'
+							: 'bg-[#2a2a2a] text-[#fbf0df] hover:bg-[#3a3a3a]'
+					}`}
+				>
+					{n}
+				</button>
+			))}
+			<span className='text-[#fbf0df]/80 text-sm'>
+				Page {currentPage} of {totalPages}
+			</span>
+			<button
+				type='button'
+				onClick={() => setPage((p) => Math.max(1, p - 1))}
+				disabled={currentPage <= 1}
+				className='px-2 py-1 rounded text-sm font-medium bg-[#2a2a2a] text-[#fbf0df] hover:bg-[#3a3a3a] disabled:opacity-50 disabled:cursor-not-allowed'
+			>
+				Prev
+			</button>
+			<button
+				type='button'
+				onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+				disabled={currentPage >= totalPages}
+				className='px-2 py-1 rounded text-sm font-medium bg-[#2a2a2a] text-[#fbf0df] hover:bg-[#3a3a3a] disabled:opacity-50 disabled:cursor-not-allowed'
+			>
+				Next
+			</button>
+			<span className='text-[#fbf0df]/80 text-sm'>Go to page:</span>
+			<input
+				type='number'
+				min={1}
+				max={totalPages}
+				value={goToInput}
+				onChange={(e) => setGoToInput(e.target.value)}
+				onKeyDown={(e) => {
+					if (e.key === 'Enter') handleGoToPage();
+				}}
+				placeholder={String(currentPage)}
+				className='w-16 bg-[#2a2a2a] text-[#fbf0df] border border-[#3a3a3a] rounded px-2 py-1 text-sm font-mono [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none'
+				aria-label='Page number'
+			/>
+			<button
+				type='button'
+				onClick={handleGoToPage}
+				className='px-2 py-1 rounded text-sm font-medium bg-[#2a2a2a] text-[#fbf0df] hover:bg-[#3a3a3a]'
+			>
+				Go
+			</button>
+		</div>
+	);
+}
+
+function TimelineView({
+	timeline,
+	decimalPrecision,
+	protocol
+}: {
+	timeline: Timeline;
+	decimalPrecision: bigint;
+	protocol: ProtocolName;
+}) {
 	const [openStream, setOpenStream] = useState<
 		'trove' | 'stabilityPool' | 'lqtyStakingPool' | 'collateralSurplusPool'
 	>('trove');
+	const [pageSize, setPageSize] = useState<25 | 50 | 100>(25);
+	const [page, setPage] = useState(1);
+
 	const streams = [
 		{ id: 'trove' as const, label: 'Trove', data: timeline.trove },
 		{
@@ -395,7 +511,10 @@ function TimelineView({ timeline }: { timeline: Timeline }) {
 					<button
 						key={id}
 						type='button'
-						onClick={() => setOpenStream(id)}
+						onClick={() => {
+							setOpenStream(id);
+							setPage(1);
+						}}
 						className={`px-3 py-1.5 rounded font-medium ${
 							openStream === id
 								? 'bg-[#fbf0df] text-[#1a1a1a]'
@@ -406,182 +525,404 @@ function TimelineView({ timeline }: { timeline: Timeline }) {
 					</button>
 				))}
 			</div>
-			{openStream === 'trove' && (
-				<div className='overflow-x-auto rounded-lg border border-[#3a3a3a]'>
-					<table className='w-full text-sm text-left'>
-						<thead className='bg-[#2a2a2a] text-[#fbf0df]'>
-							<tr>
-								<th className='p-2'>Block</th>
-								<th className='p-2'>Time</th>
-								<th className='p-2'>Operation</th>
-								<th className='p-2'>coll</th>
-								<th className='p-2'>debt</th>
-								<th className='p-2'>stake</th>
-								<th className='p-2'>collPending</th>
-								<th className='p-2'>debtPending</th>
-							</tr>
-						</thead>
-						<tbody className='text-[#fbf0df]/90 font-mono'>
-							{timeline.trove.map((e, i) => (
-								<tr
-									key={i}
-									className='border-t border-[#3a3a3a]'
-								>
-									<td className='p-2'>
-										{e.blockNumber.toString()}
-									</td>
-									<td className='p-2'>
-										{new Date(
-											Number(e.timestamp) * 1000
-										).toISOString()}
-									</td>
-									<td className='p-2'>{e.operation}</td>
-									<td className='p-2'>
-										{formatBigInt(e.coll)}
-									</td>
-									<td className='p-2'>
-										{formatBigInt(e.debt)}
-									</td>
-									<td className='p-2'>
-										{formatBigInt(e.stake)}
-									</td>
-									<td className='p-2'>
-										{formatBigInt(e.collPending)}
-									</td>
-									<td className='p-2'>
-										{formatBigInt(e.debtPending)}
-									</td>
-								</tr>
-							))}
-						</tbody>
-					</table>
-				</div>
-			)}
-			{openStream === 'stabilityPool' && (
-				<div className='overflow-x-auto rounded-lg border border-[#3a3a3a]'>
-					<table className='w-full text-sm text-left'>
-						<thead className='bg-[#2a2a2a] text-[#fbf0df]'>
-							<tr>
-								<th className='p-2'>Block</th>
-								<th className='p-2'>Time</th>
-								<th className='p-2'>Operation</th>
-								<th className='p-2'>deposit</th>
-								<th className='p-2'>pendingEthGain</th>
-								<th className='p-2'>pendingDepositLoss</th>
-								<th className='p-2'>pendingLqtyReward</th>
-							</tr>
-						</thead>
-						<tbody className='text-[#fbf0df]/90 font-mono'>
-							{timeline.stabilityPool.map((e, i) => (
-								<tr
-									key={i}
-									className='border-t border-[#3a3a3a]'
-								>
-									<td className='p-2'>
-										{e.blockNumber.toString()}
-									</td>
-									<td className='p-2'>
-										{new Date(
-											Number(e.timestamp) * 1000
-										).toISOString()}
-									</td>
-									<td className='p-2'>{e.operation}</td>
-									<td className='p-2'>
-										{formatBigInt(e.deposit)}
-									</td>
-									<td className='p-2'>
-										{formatBigInt(e.pendingEthGain)}
-									</td>
-									<td className='p-2'>
-										{formatBigInt(e.pendingDepositLoss)}
-									</td>
-									<td className='p-2'>
-										{formatBigInt(e.pendingLqtyReward)}
-									</td>
-								</tr>
-							))}
-						</tbody>
-					</table>
-				</div>
-			)}
-			{openStream === 'lqtyStakingPool' && (
-				<div className='overflow-x-auto rounded-lg border border-[#3a3a3a]'>
-					<table className='w-full text-sm text-left'>
-						<thead className='bg-[#2a2a2a] text-[#fbf0df]'>
-							<tr>
-								<th className='p-2'>Block</th>
-								<th className='p-2'>Time</th>
-								<th className='p-2'>Operation</th>
-								<th className='p-2'>stake</th>
-								<th className='p-2'>pendingEthGain</th>
-								<th className='p-2'>pendingLusdGain</th>
-							</tr>
-						</thead>
-						<tbody className='text-[#fbf0df]/90 font-mono'>
-							{timeline.lqtyStakingPool.map((e, i) => (
-								<tr
-									key={i}
-									className='border-t border-[#3a3a3a]'
-								>
-									<td className='p-2'>
-										{e.blockNumber.toString()}
-									</td>
-									<td className='p-2'>
-										{new Date(
-											Number(e.timestamp) * 1000
-										).toISOString()}
-									</td>
-									<td className='p-2'>{e.operation}</td>
-									<td className='p-2'>
-										{formatBigInt(e.stake)}
-									</td>
-									<td className='p-2'>
-										{formatBigInt(e.pendingEthGain)}
-									</td>
-									<td className='p-2'>
-										{formatBigInt(e.pendingLusdGain)}
-									</td>
-								</tr>
-							))}
-						</tbody>
-					</table>
-				</div>
-			)}
-			{openStream === 'collateralSurplusPool' && (
-				<div className='overflow-x-auto rounded-lg border border-[#3a3a3a]'>
-					<table className='w-full text-sm text-left'>
-						<thead className='bg-[#2a2a2a] text-[#fbf0df]'>
-							<tr>
-								<th className='p-2'>Block</th>
-								<th className='p-2'>Time</th>
-								<th className='p-2'>Operation</th>
-								<th className='p-2'>surplus</th>
-							</tr>
-						</thead>
-						<tbody className='text-[#fbf0df]/90 font-mono'>
-							{timeline.collateralSurplusPool.map((e, i) => (
-								<tr
-									key={i}
-									className='border-t border-[#3a3a3a]'
-								>
-									<td className='p-2'>
-										{e.blockNumber.toString()}
-									</td>
-									<td className='p-2'>
-										{new Date(
-											Number(e.timestamp) * 1000
-										).toISOString()}
-									</td>
-									<td className='p-2'>{e.operation}</td>
-									<td className='p-2'>
-										{formatBigInt(e.surplus)}
-									</td>
-								</tr>
-							))}
-						</tbody>
-					</table>
-				</div>
-			)}
+			{openStream === 'trove' &&
+				(() => {
+					const data = timeline.trove;
+					const explorerTxUrl =
+						protocols[protocol].chain.blockExplorerTxUrl;
+					const totalPages = Math.max(
+						1,
+						Math.ceil(data.length / pageSize)
+					);
+					const currentPage = Math.min(page, totalPages);
+					const slice = data.slice(
+						(currentPage - 1) * pageSize,
+						currentPage * pageSize
+					);
+					return (
+						<div className='flex flex-col gap-2'>
+							<PaginationControls
+								page={page}
+								setPage={setPage}
+								pageSize={pageSize}
+								setPageSize={setPageSize}
+								totalPages={totalPages}
+							/>
+							<div className='overflow-x-auto rounded-lg border border-[#3a3a3a]'>
+								<table className='w-full text-sm text-left'>
+									<thead className='bg-[#2a2a2a] text-[#fbf0df]'>
+										<tr>
+											<th className='p-2'>Time</th>
+											<th className='p-2'>Block</th>
+											<th className='p-2'>Tx</th>
+											<th className='p-2'>Operation</th>
+											<th className='p-2'>coll</th>
+											<th className='p-2'>debt</th>
+											<th className='p-2'>collPending</th>
+											<th className='p-2'>debtPending</th>
+										</tr>
+									</thead>
+									<tbody className='text-[#fbf0df]/90 font-mono'>
+										{slice.map((e, i) => (
+											<tr
+												key={
+													(currentPage - 1) *
+														pageSize +
+													i
+												}
+												className='border-t border-[#3a3a3a]'
+											>
+												<td className='p-2'>
+													{formatTimestamp(
+														e.timestamp
+													)}
+												</td>
+												<td className='p-2'>
+													{e.blockNumber.toString()}
+												</td>
+												<td className='p-2'>
+													{e.transactionHash ? (
+														<a
+															href={`${explorerTxUrl}${e.transactionHash}`}
+															target='_blank'
+															rel='noopener noreferrer'
+															className='text-[#7eb8da] hover:underline break-all'
+														>
+															{e.transactionHash.slice(0, 10)}…
+														</a>
+													) : (
+														'—'
+													)}
+												</td>
+												<td className='p-2'>
+													{e.operation}
+												</td>
+												<td className='p-2'>
+													{formatBigInt(
+														e.coll,
+														decimalPrecision
+													)}
+												</td>
+												<td className='p-2'>
+													{formatBigInt(
+														e.debt,
+														decimalPrecision
+													)}
+												</td>
+												<td className='p-2'>
+													{formatBigInt(
+														e.collPending,
+														decimalPrecision
+													)}
+												</td>
+												<td className='p-2'>
+													{formatBigInt(
+														e.debtPending,
+														decimalPrecision
+													)}
+												</td>
+											</tr>
+										))}
+									</tbody>
+								</table>
+							</div>
+						</div>
+					);
+				})()}
+			{openStream === 'stabilityPool' &&
+				(() => {
+					const data = timeline.stabilityPool;
+					const explorerTxUrl =
+						protocols[protocol].chain.blockExplorerTxUrl;
+					const totalPages = Math.max(
+						1,
+						Math.ceil(data.length / pageSize)
+					);
+					const currentPage = Math.min(page, totalPages);
+					const slice = data.slice(
+						(currentPage - 1) * pageSize,
+						currentPage * pageSize
+					);
+					return (
+						<div className='flex flex-col gap-2'>
+							<PaginationControls
+								page={page}
+								setPage={setPage}
+								pageSize={pageSize}
+								setPageSize={setPageSize}
+								totalPages={totalPages}
+							/>
+							<div className='overflow-x-auto rounded-lg border border-[#3a3a3a]'>
+								<table className='w-full text-sm text-left'>
+									<thead className='bg-[#2a2a2a] text-[#fbf0df]'>
+										<tr>
+											<th className='p-2'>Time</th>
+											<th className='p-2'>Block</th>
+											<th className='p-2'>Tx</th>
+											<th className='p-2'>Operation</th>
+											<th className='p-2'>deposit</th>
+											<th className='p-2'>
+												pendingEthGain
+											</th>
+											<th className='p-2'>
+												pendingDepositLoss
+											</th>
+											<th className='p-2'>
+												pendingLqtyReward
+											</th>
+										</tr>
+									</thead>
+									<tbody className='text-[#fbf0df]/90 font-mono'>
+										{slice.map((e, i) => (
+											<tr
+												key={
+													(currentPage - 1) *
+														pageSize +
+													i
+												}
+												className='border-t border-[#3a3a3a]'
+											>
+												<td className='p-2'>
+													{formatTimestamp(
+														e.timestamp
+													)}
+												</td>
+												<td className='p-2'>
+													{e.blockNumber.toString()}
+												</td>
+												<td className='p-2'>
+													{e.transactionHash ? (
+														<a
+															href={`${explorerTxUrl}${e.transactionHash}`}
+															target='_blank'
+															rel='noopener noreferrer'
+															className='text-[#7eb8da] hover:underline break-all'
+														>
+															{e.transactionHash.slice(0, 10)}…
+														</a>
+													) : (
+														'—'
+													)}
+												</td>
+												<td className='p-2'>
+													{e.operation}
+												</td>
+												<td className='p-2'>
+													{formatBigInt(
+														e.deposit,
+														decimalPrecision
+													)}
+												</td>
+												<td className='p-2'>
+													{formatBigInt(
+														e.pendingEthGain,
+														decimalPrecision
+													)}
+												</td>
+												<td className='p-2'>
+													{formatBigInt(
+														e.pendingLusdLoss,
+														decimalPrecision
+													)}
+												</td>
+												<td className='p-2'>
+													{formatBigInt(
+														e.pendingLqtyReward,
+														decimalPrecision
+													)}
+												</td>
+											</tr>
+										))}
+									</tbody>
+								</table>
+							</div>
+						</div>
+					);
+				})()}
+			{openStream === 'lqtyStakingPool' &&
+				(() => {
+					const data = timeline.lqtyStakingPool;
+					const explorerTxUrl =
+						protocols[protocol].chain.blockExplorerTxUrl;
+					const totalPages = Math.max(
+						1,
+						Math.ceil(data.length / pageSize)
+					);
+					const currentPage = Math.min(page, totalPages);
+					const slice = data.slice(
+						(currentPage - 1) * pageSize,
+						currentPage * pageSize
+					);
+					return (
+						<div className='flex flex-col gap-2'>
+							<PaginationControls
+								page={page}
+								setPage={setPage}
+								pageSize={pageSize}
+								setPageSize={setPageSize}
+								totalPages={totalPages}
+							/>
+							<div className='overflow-x-auto rounded-lg border border-[#3a3a3a]'>
+								<table className='w-full text-sm text-left'>
+									<thead className='bg-[#2a2a2a] text-[#fbf0df]'>
+										<tr>
+											<th className='p-2'>Time</th>
+											<th className='p-2'>Block</th>
+											<th className='p-2'>Tx</th>
+											<th className='p-2'>Operation</th>
+											<th className='p-2'>stake</th>
+											<th className='p-2'>
+												pendingEthGain
+											</th>
+											<th className='p-2'>
+												pendingLusdGain
+											</th>
+										</tr>
+									</thead>
+									<tbody className='text-[#fbf0df]/90 font-mono'>
+										{slice.map((e, i) => (
+											<tr
+												key={
+													(currentPage - 1) *
+														pageSize +
+													i
+												}
+												className='border-t border-[#3a3a3a]'
+											>
+												<td className='p-2'>
+													{formatTimestamp(
+														e.timestamp
+													)}
+												</td>
+												<td className='p-2'>
+													{e.blockNumber.toString()}
+												</td>
+												<td className='p-2'>
+													{e.transactionHash ? (
+														<a
+															href={`${explorerTxUrl}${e.transactionHash}`}
+															target='_blank'
+															rel='noopener noreferrer'
+															className='text-[#7eb8da] hover:underline break-all'
+														>
+															{e.transactionHash.slice(0, 10)}…
+														</a>
+													) : (
+														'—'
+													)}
+												</td>
+												<td className='p-2'>
+													{e.operation}
+												</td>
+												<td className='p-2'>
+													{formatBigInt(
+														e.stake,
+														decimalPrecision
+													)}
+												</td>
+												<td className='p-2'>
+													{formatBigInt(
+														e.pendingEthGain,
+														decimalPrecision
+													)}
+												</td>
+												<td className='p-2'>
+													{formatBigInt(
+														e.pendingLusdGain,
+														decimalPrecision
+													)}
+												</td>
+											</tr>
+										))}
+									</tbody>
+								</table>
+							</div>
+						</div>
+					);
+				})()}
+			{openStream === 'collateralSurplusPool' &&
+				(() => {
+					const data = timeline.collateralSurplusPool;
+					const explorerTxUrl =
+						protocols[protocol].chain.blockExplorerTxUrl;
+					const totalPages = Math.max(
+						1,
+						Math.ceil(data.length / pageSize)
+					);
+					const currentPage = Math.min(page, totalPages);
+					const slice = data.slice(
+						(currentPage - 1) * pageSize,
+						currentPage * pageSize
+					);
+					return (
+						<div className='flex flex-col gap-2'>
+							<PaginationControls
+								page={page}
+								setPage={setPage}
+								pageSize={pageSize}
+								setPageSize={setPageSize}
+								totalPages={totalPages}
+							/>
+							<div className='overflow-x-auto rounded-lg border border-[#3a3a3a]'>
+								<table className='w-full text-sm text-left'>
+									<thead className='bg-[#2a2a2a] text-[#fbf0df]'>
+										<tr>
+											<th className='p-2'>Time</th>
+											<th className='p-2'>Block</th>
+											<th className='p-2'>Tx</th>
+											<th className='p-2'>Operation</th>
+											<th className='p-2'>surplus</th>
+										</tr>
+									</thead>
+									<tbody className='text-[#fbf0df]/90 font-mono'>
+										{slice.map((e, i) => (
+											<tr
+												key={
+													(currentPage - 1) *
+														pageSize +
+													i
+												}
+												className='border-t border-[#3a3a3a]'
+											>
+												<td className='p-2'>
+													{formatTimestamp(
+														e.timestamp
+													)}
+												</td>
+												<td className='p-2'>
+													{e.blockNumber.toString()}
+												</td>
+												<td className='p-2'>
+													{e.transactionHash ? (
+														<a
+															href={`${explorerTxUrl}${e.transactionHash}`}
+															target='_blank'
+															rel='noopener noreferrer'
+															className='text-[#7eb8da] hover:underline break-all'
+														>
+															{e.transactionHash.slice(0, 10)}…
+														</a>
+													) : (
+														'—'
+													)}
+												</td>
+												<td className='p-2'>
+													{e.operation}
+												</td>
+												<td className='p-2'>
+													{formatBigInt(
+														e.surplus,
+														decimalPrecision
+													)}
+												</td>
+											</tr>
+										))}
+									</tbody>
+								</table>
+							</div>
+						</div>
+					);
+				})()}
 		</div>
 	);
 }
