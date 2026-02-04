@@ -425,6 +425,183 @@ export async function setCachedArray<T = unknown>(
 	}
 }
 
+const GLOBAL_ARRAY_KEYS = [
+	'frontEndsRegistered',
+	'P',
+	'S',
+	'G',
+	'scale',
+	'epoch',
+	'LTerms',
+	'FEth',
+	'FLusd'
+] as const;
+
+const USER_ARRAY_KEYS = [
+	'userTroveUpdates',
+	'collSurplusBalance',
+	'depositUpdates',
+	'PSGSnapshots',
+	'frontEndTagChanges',
+	'systemTroveUpdates',
+	'LTermsSnapshots',
+	'stakeUpdates',
+	'FTermsSnapshots'
+] as const;
+
+/**
+ * Export the entire global cache for a protocol as JSON.
+ * Includes arrays and per-array lastFetchedBlock. Bigints become { "$bigint": "..." } in output.
+ */
+export async function exportGlobalCache(
+	protocol: ProtocolName
+): Promise<string> {
+	const DECIMAL_PRECISION = await getCachedState<bigint>(protocol, [
+		'global',
+		'DECIMAL_PRECISION'
+	]);
+	const SCALE_FACTOR = await getCachedState<bigint>(protocol, [
+		'global',
+		'SCALE_FACTOR'
+	]);
+
+	const lastFetchedBlocks: Record<string, bigint | null> = {};
+	const arrays: Record<string, unknown[]> = {};
+
+	for (const key of GLOBAL_ARRAY_KEYS) {
+		arrays[key] = await readCachedArray(protocol, ['global', key]);
+		lastFetchedBlocks[key] = await getCachedState<bigint>(protocol, [
+			'global',
+			key,
+			'lastFetchedBlock'
+		]);
+	}
+
+	const obj = {
+		DECIMAL_PRECISION,
+		SCALE_FACTOR,
+		...arrays,
+		lastFetchedBlocks
+	};
+
+	return JSON.stringify(obj, null, 2);
+}
+
+/**
+ * Export the entire user cache for a protocol and address as JSON.
+ * Includes arrays and per-array lastFetchedBlock. Bigints become { "$bigint": "..." } in output.
+ */
+export async function exportUserCache(
+	protocol: ProtocolName,
+	address: string
+): Promise<string> {
+	const lastFetchedBlocks: Record<string, bigint | null> = {};
+	const arrays: Record<string, unknown[]> = {};
+
+	for (const key of USER_ARRAY_KEYS) {
+		arrays[key] = await readCachedArray(protocol, [address, key]);
+		lastFetchedBlocks[key] = await getCachedState<bigint>(protocol, [
+			address,
+			key,
+			'lastFetchedBlock'
+		]);
+	}
+
+	const obj = { ...arrays, lastFetchedBlocks };
+	return JSON.stringify(obj, null, 2);
+}
+
+/**
+ * Import a global cache from JSON into IDB for the protocol.
+ * Replaces all existing global cache for that protocol.
+ */
+export async function importGlobalCache(
+	protocol: ProtocolName,
+	jsonString: string
+): Promise<void> {
+	const raw = JSON.parse(jsonString) as Record<string, unknown>;
+	const obj = deserializeBigInt(raw) as {
+		DECIMAL_PRECISION?: bigint | null;
+		SCALE_FACTOR?: bigint | null;
+		[key: string]: unknown;
+	};
+
+	await clearCachedStateForBaseKey(protocol, 'global');
+
+	if (obj.DECIMAL_PRECISION != null) {
+		await setCachedState(
+			protocol,
+			['global', 'DECIMAL_PRECISION'],
+			obj.DECIMAL_PRECISION
+		);
+	}
+	if (obj.SCALE_FACTOR != null) {
+		await setCachedState(
+			protocol,
+			['global', 'SCALE_FACTOR'],
+			obj.SCALE_FACTOR
+		);
+	}
+
+	const lastFetchedBlocks = (obj.lastFetchedBlocks ?? {}) as Record<
+		string,
+		bigint | null
+	>;
+
+	for (const key of GLOBAL_ARRAY_KEYS) {
+		const arr = obj[key];
+		if (Array.isArray(arr)) {
+			await setCachedArray(protocol, ['global', key], arr);
+		}
+		const lfb = lastFetchedBlocks[key];
+		if (lfb != null) {
+			await setCachedState(
+				protocol,
+				['global', key, 'lastFetchedBlock'],
+				lfb
+			);
+		}
+	}
+}
+
+/**
+ * Import a user cache from JSON into IDB for the protocol and address.
+ * Replaces all existing cache for that protocol + address.
+ */
+export async function importUserCache(
+	protocol: ProtocolName,
+	address: string,
+	jsonString: string
+): Promise<void> {
+	const raw = JSON.parse(jsonString) as Record<string, unknown>;
+	const obj = deserializeBigInt(raw) as {
+		lastFetchedBlocks?: Record<string, bigint | null>;
+		[key: string]: unknown;
+	};
+
+	await clearCachedStateForBaseKey(protocol, address);
+
+	const lastFetchedBlocks = (obj.lastFetchedBlocks ?? {}) as Record<
+		string,
+		bigint | null
+	>;
+
+	for (const key of USER_ARRAY_KEYS) {
+		const arr = obj[key];
+		if (Array.isArray(arr)) {
+			await setCachedArray(protocol, [address, key], arr);
+		}
+		const lfb = lastFetchedBlocks[key];
+		if (lfb != null) {
+			await setCachedState(
+				protocol,
+				[address, key, 'lastFetchedBlock'],
+				lfb
+			);
+		}
+	}
+}
+
 /**
  * Clear all cached state for a specific baseKey (e.g. a user address) within a protocol.
  * Use this to delete all of one user's cached entries.

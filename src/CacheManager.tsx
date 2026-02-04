@@ -2,6 +2,11 @@ import { useState, useEffect, useCallback, type FormEvent } from 'react';
 import {
 	clearCachedState,
 	clearCachedStateForBaseKey,
+	exportGlobalCache,
+	exportUserCache,
+	importGlobalCache,
+	importUserCache,
+	getCachedArrayLength,
 	listCacheKeyPathsForDisplay,
 	type DisplayCacheEntry,
 	type ListCacheEntriesFilter
@@ -33,6 +38,12 @@ export function CacheManager({
 	const [deleteProtocolConfirm, setDeleteProtocolConfirm] = useState(false);
 	const [deleting, setDeleting] = useState(false);
 
+	const [exportUserAddress, setExportUserAddress] = useState('');
+	const [importUserAddress, setImportUserAddress] = useState('');
+	const [exporting, setExporting] = useState(false);
+	const [importing, setImporting] = useState(false);
+	const [hasGlobalCache, setHasGlobalCache] = useState<boolean | null>(null);
+
 	const loadEntries = useCallback(async () => {
 		setLoading(true);
 		setError(null);
@@ -52,6 +63,117 @@ export function CacheManager({
 	useEffect(() => {
 		loadEntries();
 	}, [loadEntries, refreshTrigger]);
+
+	useEffect(() => {
+		let cancelled = false;
+		getCachedArrayLength(protocol, ['global', 'P'])
+			.then((len) => {
+				if (!cancelled) setHasGlobalCache(len > 0);
+			})
+			.catch(() => {
+				if (!cancelled) setHasGlobalCache(false);
+			});
+		return () => {
+			cancelled = true;
+		};
+	}, [protocol, refreshTrigger]);
+
+	const handleExportGlobalCache = async () => {
+		setExporting(true);
+		setError(null);
+		setSuccess(null);
+		try {
+			const json = await exportGlobalCache(protocol);
+			const blob = new Blob([json], { type: 'application/json' });
+			const url = URL.createObjectURL(blob);
+			const a = document.createElement('a');
+			a.href = url;
+			a.download = `${protocol}-global-cache.json`;
+			a.click();
+			URL.revokeObjectURL(url);
+			setSuccess(`Exported global cache for ${protocol}`);
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			setError(`Failed to export global cache: ${msg}`);
+		} finally {
+			setExporting(false);
+		}
+	};
+
+	const handleExportUserCache = async (e: FormEvent<HTMLFormElement>) => {
+		e.preventDefault();
+		const address = exportUserAddress.trim();
+		if (!address) {
+			setError('Enter an address to export');
+			return;
+		}
+		setExporting(true);
+		setError(null);
+		setSuccess(null);
+		try {
+			const json = await exportUserCache(protocol, address);
+			const blob = new Blob([json], { type: 'application/json' });
+			const url = URL.createObjectURL(blob);
+			const a = document.createElement('a');
+			a.href = url;
+			a.download = `${protocol}-user-${address.slice(0, 10)}-cache.json`;
+			a.click();
+			URL.revokeObjectURL(url);
+			setSuccess(`Exported user cache for ${address.slice(0, 10)}…`);
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			setError(`Failed to export user cache: ${msg}`);
+		} finally {
+			setExporting(false);
+		}
+	};
+
+	const handleImportGlobalCache = async (
+		e: React.ChangeEvent<HTMLInputElement>
+	) => {
+		const file = e.target.files?.[0];
+		if (!file) return;
+		setImporting(true);
+		setError(null);
+		setSuccess(null);
+		try {
+			const json = await file.text();
+			await importGlobalCache(protocol, json);
+			setSuccess(`Imported global cache for ${protocol}`);
+			await loadEntries();
+			const len = await getCachedArrayLength(protocol, ['global', 'P']);
+			setHasGlobalCache(len > 0);
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			setError(`Failed to import global cache: ${msg}`);
+		} finally {
+			setImporting(false);
+			e.target.value = '';
+		}
+	};
+
+	const handleImportUserCache = async (
+		e: React.ChangeEvent<HTMLInputElement>
+	) => {
+		const file = e.target.files?.[0];
+		const address = importUserAddress.trim();
+		if (!file || !address) return;
+		setImporting(true);
+		setError(null);
+		setSuccess(null);
+		try {
+			const json = await file.text();
+			await importUserCache(protocol, address, json);
+			setSuccess(`Imported user cache for ${address.slice(0, 10)}…`);
+			await loadEntries();
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			setError(`Failed to import user cache: ${msg}`);
+		} finally {
+			setImporting(false);
+			e.target.value = '';
+		}
+	};
 
 	const handleDeleteForAddress = async (e: FormEvent<HTMLFormElement>) => {
 		e.preventDefault();
@@ -211,6 +333,90 @@ export function CacheManager({
 					</ul>
 				</div>
 			)}
+
+			<div className='flex flex-col gap-4 mt-4'>
+				<h3 className='text-xl font-bold text-[#fbf0df]'>
+					Export / Import cache
+				</h3>
+				<div className='flex flex-wrap items-end gap-3'>
+					<button
+						type='button'
+						onClick={handleExportGlobalCache}
+						disabled={exporting || hasGlobalCache === false}
+						className='bg-[#3a3a3a] text-[#fbf0df] border-2 border-[#4a4a4a] px-4 py-2 rounded-lg font-semibold disabled:opacity-50'
+					>
+						{exporting ? 'Exporting...' : 'Export global cache'}
+					</button>
+					<label className='bg-[#3a3a3a] text-[#fbf0df] border-2 border-[#4a4a4a] px-4 py-2 rounded-lg font-semibold cursor-pointer disabled:opacity-50 inline-block'>
+						{importing ? 'Importing...' : 'Import global cache'}
+						<input
+							type='file'
+							accept='.json'
+							className='sr-only'
+							disabled={importing}
+							onChange={handleImportGlobalCache}
+						/>
+					</label>
+				</div>
+				<form
+					onSubmit={handleExportUserCache}
+					className='flex flex-wrap items-end gap-2'
+				>
+					<div className='flex flex-col gap-1'>
+						<label
+							htmlFor='export-user-address'
+							className='text-[#fbf0df] text-sm'
+						>
+							Export user cache (address)
+						</label>
+						<input
+							id='export-user-address'
+							type='text'
+							value={exportUserAddress}
+							onChange={(e) => setExportUserAddress(e.target.value)}
+							placeholder='0x...'
+							className='bg-[#fbf0df] text-[#1a1a1a] py-2 px-3 rounded-lg font-mono w-64'
+							disabled={exporting}
+						/>
+					</div>
+					<button
+						type='submit'
+						disabled={exporting || !exportUserAddress.trim()}
+						className='bg-[#3a3a3a] text-[#fbf0df] border-2 border-[#4a4a4a] px-4 py-2 rounded-lg font-semibold disabled:opacity-50'
+					>
+						{exporting ? 'Exporting...' : 'Export user cache'}
+					</button>
+				</form>
+				<div className='flex flex-wrap items-end gap-2'>
+					<div className='flex flex-col gap-1'>
+						<label
+							htmlFor='import-user-address'
+							className='text-[#fbf0df] text-sm'
+						>
+							Import user cache (address)
+						</label>
+						<input
+							id='import-user-address'
+							type='text'
+							value={importUserAddress}
+							onChange={(e) => setImportUserAddress(e.target.value)}
+							placeholder='0x...'
+							className='bg-[#fbf0df] text-[#1a1a1a] py-2 px-3 rounded-lg font-mono w-64'
+							disabled={importing}
+						/>
+					</div>
+					<label className='bg-[#3a3a3a] text-[#fbf0df] border-2 border-[#4a4a4a] px-4 py-2 rounded-lg font-semibold cursor-pointer disabled:opacity-50 inline-block'>
+						{importing ? 'Importing...' : 'Choose file'}
+						<input
+							type='file'
+							accept='.json'
+							className='sr-only'
+							disabled={importing || !importUserAddress.trim()}
+							onChange={handleImportUserCache}
+						/>
+					</label>
+				</div>
+			</div>
 
 			<div className='flex flex-col gap-4 mt-4'>
 				<h3 className='text-xl font-bold text-[#fbf0df]'>
