@@ -67,6 +67,13 @@ export type UserState = {
 		timestamp: bigint;
 		transactionHash: Hash;
 	}[];
+	lqtyPayouts: {
+		amount: bigint;
+		blockNumber: bigint;
+		transactionIndex: number;
+		timestamp: bigint;
+		transactionHash: Hash;
+	}[];
 
 	// Trove Manager
 	systemTroveUpdates: {
@@ -336,6 +343,55 @@ export async function getUserState(
 	);
 
 	/** ------------------------------------------------------------------------
+	 * lqtyPayouts
+	 ------------------------------------------------------------------------ */
+	progress?.('Retrieving user LQTY staking payouts');
+	const lqtyPayoutsBlockNumbers = await getBlockNumbersForEvents(
+		{
+			protocol,
+			keyPath: [userAddress, 'lqtyPayouts']
+		},
+		{
+			array: depositUpdates,
+			filter: (lastBlockNumber: bigint) => {
+				return (e: UserState['depositUpdates'][number]) => {
+					return e.blockNumber > lastBlockNumber;
+				};
+			}
+		}
+	);
+
+	const lqtyPayouts = await getCacheAndTransformEventsFromBlockNumbers({
+		...commonArgs,
+		contract: 'stabilityPool',
+		normalItemName: 'LQTYPaidToDepositor',
+		blockNumbers: lqtyPayoutsBlockNumbers,
+		blockNumberToTimestampMap,
+		keyPath: [userAddress, 'lqtyPayouts'],
+		transform: (e) => {
+			const _LQTY = replaceBrandedWordsInString(
+				'_LQTY',
+				protocols[protocol].modifiers
+			) as ReplaceBrandedWordsInStringForAllProtocols<'_LQTY'>;
+
+			const LQTY = e.args[
+				_LQTY as keyof typeof e.args
+			] as ExtractUnionValue<
+				typeof e.args,
+				ReplaceBrandedWordsInStringForAllProtocols<'_LQTY'>
+			>;
+
+			return {
+				amount: LQTY!,
+				blockNumber: e.blockNumber,
+				transactionIndex: e.transactionIndex,
+				timestamp: e.blockTimestamp!,
+				transactionHash: e.transactionHash
+			};
+		}
+	});
+
+	/** ------------------------------------------------------------------------
 	 * systemTroveUpdates
 	 ------------------------------------------------------------------------ */
 	progress?.('Retrieving user trove changes from trove manager');
@@ -530,6 +586,7 @@ export async function getUserState(
 		depositUpdates,
 		PSGSnapshots,
 		frontEndTagChanges,
+		lqtyPayouts,
 		systemTroveUpdates,
 		LTermsSnapshots,
 		stakeUpdates,

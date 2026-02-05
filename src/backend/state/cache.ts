@@ -868,14 +868,8 @@ export async function clearCachedState(protocol: ProtocolName): Promise<void> {
 				} else {
 					// Cursor finished iterating
 					cursorFinished = true;
-					// If transaction already completed (unlikely but possible), resolve immediately
-					if (transaction.readyState === 'done') {
-						console.log(
-							`Deleted ${deletedCount} entries for protocol: ${protocol}`
-						);
-						resolve();
-					}
-					// Otherwise, wait for transaction.oncomplete
+					// Transaction will complete after all operations finish
+					// Resolution handled by transaction.oncomplete handler
 				}
 			};
 			request.onerror = () => reject(request.error);
