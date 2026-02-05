@@ -32,6 +32,8 @@ export type Timeline = {
 		coll: bigint;
 		debt: bigint;
 		stake: bigint;
+		fees: bigint;
+		lusdGasComp: bigint;
 		collPending: bigint;
 		debtPending: bigint;
 		operation:
@@ -117,6 +119,9 @@ export async function constructTimeline(
 					coll: e.coll,
 					debt: e.debt,
 					stake: e.stake,
+					fees: 0n,
+					lusdGasComp:
+						e.coll > 0n ? global.LUSD_GAS_COMPENSATION : 0n,
 					collPending: 0n,
 					debtPending: 0n,
 					operation: e.operation,
@@ -131,6 +136,9 @@ export async function constructTimeline(
 					coll: e.coll,
 					debt: e.debt,
 					stake: e.stake,
+					fees: 0n,
+					lusdGasComp:
+						e.coll > 0n ? global.LUSD_GAS_COMPENSATION : 0n,
 					collPending: 0n,
 					debtPending: 0n,
 					operation: e.operation,
@@ -233,7 +241,8 @@ export async function constructTimeline(
 
 	return {
 		timeline,
-		decimalPrecision: global.DECIMAL_PRECISION
+		decimalPrecision: global.DECIMAL_PRECISION,
+		lusdGasCompensation: global.LUSD_GAS_COMPENSATION
 	};
 }
 
@@ -246,6 +255,7 @@ function spliceTroveEventsFromLTerms(
 
 	const cachedTrove = { event: timeline.trove[0]!, index: 0 };
 	let cachedLTermSnapshotIndex = 0;
+	let cachedborrowingFeesIndex = 0;
 
 	// L Terms get updated on liquidations when stability pool is empty
 	// This is typically 0 since the stability pool is rarely if ever empty
@@ -279,6 +289,14 @@ function spliceTroveEventsFromLTerms(
 		});
 		cachedLTermSnapshotIndex = lastLTermsSnapshot.index;
 
+		const lastborrowingFees = getEventBeforComparator({
+			comparator: globalLTerms,
+			eventArray: user.borrowingFees,
+			startIndex: cachedborrowingFeesIndex,
+			takeEventInSameTxnIndex: true
+		});
+		cachedborrowingFeesIndex = lastborrowingFees.index;
+
 		/**
 		 * Coll Gain
 		 */
@@ -301,6 +319,8 @@ function spliceTroveEventsFromLTerms(
 			coll: lastTrove.event!.coll,
 			debt: lastTrove.event!.debt,
 			stake: lastTrove.event!.stake,
+			fees: 0n,
+			lusdGasComp: global.LUSD_GAS_COMPENSATION,
 			collPending: pendingEthReward,
 			debtPending: pendingLusdReward,
 			operation: '3rdPartyLiquidationWithEmptyStabilityPool',
@@ -326,8 +346,6 @@ async function spliceStabilityPoolEventsFromPSAndG(
 	let cachedScaleSnapshotIndex = 0;
 	let cachedEpochSnapshotIndex = 0;
 	let cachedFrontEndTagIndex = 0;
-	let cachedGlobalPIndex = 0;
-	let cachedGlobalSIndex = 0;
 	let cachedGlobalScaleIndex = 0;
 	let cachedGlobalEpochIndex = 0;
 
@@ -351,13 +369,75 @@ async function spliceStabilityPoolEventsFromPSAndG(
 		scale: 0n
 	};
 
-	for (const globalG of global.G) {
-		if (isBefore(globalG, timeline.stabilityPool[0]!)) continue;
+	type PItem = (typeof global.P)[number];
+	type SItem = (typeof global.S)[number];
+	type GItem = (typeof global.G)[number];
 
-		// Global G and G snapshots also update on user deposit ops, so we need
-		// to allow same txn index
+	const psgByKey = new Map<
+		string,
+		{ p: PItem | null; s: SItem | null; g: GItem | null }
+	>();
+
+	function key(blockNumber: bigint, transactionIndex: number) {
+		return `${blockNumber}-${transactionIndex}`;
+	}
+
+	for (const item of global.P) {
+		const k = key(item.blockNumber, item.transactionIndex);
+		const existing = psgByKey.get(k) ?? {
+			p: null as PItem | null,
+			s: null as SItem | null,
+			g: null as GItem | null
+		};
+		existing.p = item;
+		psgByKey.set(k, existing);
+	}
+	for (const item of global.S) {
+		const k = key(item.blockNumber, item.transactionIndex);
+		const existing = psgByKey.get(k) ?? {
+			p: null as PItem | null,
+			s: null as SItem | null,
+			g: null as GItem | null
+		};
+		existing.s = item;
+		psgByKey.set(k, existing);
+	}
+	for (const item of global.G) {
+		const k = key(item.blockNumber, item.transactionIndex);
+		const existing = psgByKey.get(k) ?? {
+			p: null as PItem | null,
+			s: null as SItem | null,
+			g: null as GItem | null
+		};
+		existing.g = item;
+		psgByKey.set(k, existing);
+	}
+
+	/** When P is non-null, S is non-null (same tx). When P is null, only G can be set (e.g. user deposit). */
+	type PSGItem =
+		| [PItem, SItem, GItem]
+		| [PItem, SItem, null]
+		| [null, null, GItem];
+
+	const PSG: PSGItem[] = Array.from(psgByKey.entries())
+		.sort(([keyA], [keyB]) => {
+			const [blockStrA, txStrA] = keyA.split('-');
+			const [blockStrB, txStrB] = keyB.split('-');
+			const blockA = BigInt(blockStrA ?? 0);
+			const blockB = BigInt(blockStrB ?? 0);
+			const txA = Number(txStrA ?? 0);
+			const txB = Number(txStrB ?? 0);
+			if (blockA !== blockB) return blockA < blockB ? -1 : 1;
+			return txA - txB;
+		})
+		.map(([_, v]) => [v.p, v.s, v.g]) as PSGItem[];
+
+	for (const globalPSG of PSG) {
+		const [globalP, globalS, globalG] = globalPSG;
+		if (isBefore(globalG ?? globalP, timeline.stabilityPool[0]!)) continue;
+
 		const lastDeposit = getEventBeforComparator({
-			comparator: globalG,
+			comparator: globalG ?? globalP,
 			eventArray: timeline.stabilityPool,
 			startIndex: cachedDeposit.index,
 			takeEventInSameTxnIndex: true
@@ -375,7 +455,7 @@ async function spliceStabilityPoolEventsFromPSAndG(
 		if (lastDeposit.event!.deposit === 0n) continue;
 
 		const lastPSGSnapshot = getEventBeforComparator({
-			comparator: globalG,
+			comparator: globalG ?? globalP,
 			eventArray: user.PSGSnapshots,
 			startIndex: cachedPSGSnapshotIndex,
 			takeEventInSameTxnIndex: true
@@ -399,32 +479,15 @@ async function spliceStabilityPoolEventsFromPSAndG(
 		cachedEpochSnapshotIndex = lastEpochSnapshot.index;
 
 		const lastFrontEndTag = getEventBeforComparator({
-			comparator: globalG,
+			comparator: globalG ?? globalP,
 			eventArray: user.frontEndTagChanges,
 			startIndex: cachedFrontEndTagIndex,
 			takeEventInSameTxnIndex: false
 		});
 		cachedFrontEndTagIndex = lastFrontEndTag.index;
 
-		// P and S can update with G so allow same txn index
-		const lastGlobalP = getEventBeforComparator({
-			comparator: globalG,
-			eventArray: global.P,
-			startIndex: cachedGlobalPIndex,
-			takeEventInSameTxnIndex: true
-		});
-		cachedGlobalPIndex = lastGlobalP.index;
-
-		const lastGlobalS = getEventBeforComparator({
-			comparator: globalG,
-			eventArray: global.S,
-			startIndex: cachedGlobalSIndex,
-			takeEventInSameTxnIndex: true
-		});
-		cachedGlobalSIndex = lastGlobalS.index;
-
 		const lastGlobalScale = getEventBeforComparator({
-			comparator: globalG,
+			comparator: globalG ?? globalP,
 			eventArray: global.scale,
 			startIndex: cachedGlobalScaleIndex,
 			takeEventInSameTxnIndex: false
@@ -432,7 +495,7 @@ async function spliceStabilityPoolEventsFromPSAndG(
 		cachedGlobalScaleIndex = lastGlobalScale.index;
 
 		const lastGlobalEpoch = getEventBeforComparator({
-			comparator: globalG,
+			comparator: globalG ?? globalP,
 			eventArray: global.epoch,
 			startIndex: cachedGlobalEpochIndex,
 			takeEventInSameTxnIndex: false
@@ -444,111 +507,58 @@ async function spliceStabilityPoolEventsFromPSAndG(
 		let lusdLoss =
 			timeline.stabilityPool[lastDeposit.index]!.pendingLusdLoss;
 
-		/** --------------------------------------------------------------------
-		 * LQTY Reward
-		 -------------------------------------------------------------------- */
-		// Every time G is updated, the pending lqty reward changes, but isn't
-		// applied until the user deposits or withdraws. Everytime a 3rd party
-		// user deposits or withdraws or when a liquidation happens G is updated
-		let firstPortionG = 0n;
-		let secondPortionG = 0n;
-
-		// If a scale change happened between the last deposit and the event
-		// scale changes are extremely rare and epochs virtually impossible, but
-		// add the logic for completeness
-		if (lastScaleSnapshot.event !== lastGlobalScale.event) {
-			const finalGAtDepositScale = await (async () => {
-				// If we compare against the deposit snapshots, then the final
-				// G/S will not be re-retrieved until next deposit. So use the
-				// global values as the test
-				const cachedScaleSameAsGlobal =
-					(lastGlobalScale.event?.scale ?? 0n) ===
-					cachedEpochAndScale.scale;
-
-				if (cachedScaleSameAsGlobal) {
-					return cachedGAtEpochAndScale;
-				} else {
-					cachedEpochAndScale = {
-						epoch: lastGlobalEpoch.event?.epoch ?? 0n,
-						scale: lastGlobalScale.event!.scale
-					};
-
-					cachedGAtEpochAndScale = await client.readContract({
-						address: protocols[protocol].stabilityPool,
-						abi: [
-							getAbiItem(
-								protocol,
-								'stabilityPool',
-								'epochToScaleToG'
-							)
-						],
-						functionName: 'epochToScaleToG',
-						args: [
-							lastGlobalEpoch.event?.epoch ?? 0n,
-							lastGlobalScale.event?.scale ?? 0n
-						]
-					});
-
-					// This won't get used in the lqty reward calculation, but
-					// it is used in the eth gain calc, so may as well retrieve
-					// and cache it now
-					cachedSAtEpochAndScale = await client.readContract({
-						address: protocols[protocol].stabilityPool,
-						abi: [
-							getAbiItem(
-								protocol,
-								'stabilityPool',
-								'epochToScaleToSum'
-							)
-						],
-						functionName: 'epochToScaleToSum',
-						args: [
-							lastGlobalEpoch.event?.epoch ?? 0n,
-							lastGlobalScale.event?.scale ?? 0n
-						]
-					});
-
-					return cachedGAtEpochAndScale;
-				}
-			})();
-
-			firstPortionG = finalGAtDepositScale - lastPSGSnapshot.event!.G;
-			secondPortionG = globalG.G / global.SCALE_FACTOR;
-		} else {
-			firstPortionG = globalG.G - lastPSGSnapshot.event!.G;
-			// secondPortionG stays 0n
-		}
-
-		const fullLqtyReward =
-			(lastDeposit.event!.deposit * (firstPortionG + secondPortionG)) /
-			lastPSGSnapshot.event!.P /
-			global.DECIMAL_PRECISION;
-
-		// Find the kickback rate of the matching front end tag, else use 100%
-		const kickbackRate =
-			global.frontEndsRegistered.find(
-				(e) => e.frontEnd === lastFrontEndTag.event!.frontEndTag
-			)?.kickbackRate ?? global.DECIMAL_PRECISION;
-
-		lqtyReward = (kickbackRate * fullLqtyReward) / global.DECIMAL_PRECISION;
-
-		// P and S always update with every liquidation, meaning it always
-		// updates with G, so do this in the same loop as G. But not all G
-		// updates have a P and S updates so skip it if needed
-		if (isSameTxn(lastGlobalP.event!, globalG)) {
+		if (globalP) {
 			/** ----------------------------------------------------------------
 			 * ETH Gain
 			 ---------------------------------------------------------------- */
+			// Everytime P and S update, the pending ETH gain and LUSD loss
+			// changes. P and S update whenever a liquidation happens, and most
+			// times G will update as well, but that is not guaranteed
 			let firstPortionS = 0n;
 			let secondPortionS = 0n;
 
 			// If a scale change happened between the last deposit and the liq
 			if (lastScaleSnapshot.event !== lastGlobalScale.event) {
-				const finalSAtDepositScale = cachedSAtEpochAndScale;
+				const finalSAtDepositScale = await (async () => {
+					// If we compare against the deposit snapshots, then the
+					// final SS will not be re-retrieved until next deposit. So
+					// use the global values as the test
+					const cachedScaleSameAsGlobal =
+						(lastGlobalScale.event?.scale ?? 0n) ===
+						cachedEpochAndScale.scale;
+
+					if (cachedScaleSameAsGlobal) {
+						return cachedGAtEpochAndScale;
+					} else {
+						cachedEpochAndScale = {
+							epoch: lastGlobalEpoch.event?.epoch ?? 0n,
+							scale: lastGlobalScale.event!.scale
+						};
+
+						cachedSAtEpochAndScale = await client.readContract({
+							address: protocols[protocol].stabilityPool,
+							abi: [
+								getAbiItem(
+									protocol,
+									'stabilityPool',
+									'epochToScaleToSum'
+								)
+							],
+							functionName: 'epochToScaleToSum',
+							args: [
+								lastGlobalEpoch.event?.epoch ?? 0n,
+								lastGlobalScale.event?.scale ?? 0n
+							]
+						});
+
+						return cachedSAtEpochAndScale;
+					}
+				})();
+
 				firstPortionS = finalSAtDepositScale - lastPSGSnapshot.event!.S;
-				secondPortionS = lastGlobalS.event!.S / global.SCALE_FACTOR;
+				secondPortionS = globalS.S / global.SCALE_FACTOR;
 			} else {
-				firstPortionS = lastGlobalS.event!.S - lastPSGSnapshot.event!.S;
+				firstPortionS = globalS.S - lastPSGSnapshot.event!.S;
 				// secondPortion stays 0n
 			}
 
@@ -560,7 +570,7 @@ async function spliceStabilityPoolEventsFromPSAndG(
 
 			/** ----------------------------------------------------------------
 			 * LUSD Loss
-			 ---------------------------------------------------------------- */
+			 --------------------------------------------------------------- */
 			const scaleDiff =
 				(lastGlobalScale.event?.scale ?? 0n) -
 				(lastScaleSnapshot.event?.scale ?? 0n);
@@ -569,7 +579,7 @@ async function spliceStabilityPoolEventsFromPSAndG(
 
 			if (scaleDiff === 0n) {
 				compoundedStake =
-					(lastDeposit.event!.deposit * lastGlobalP.event!.P) /
+					(lastDeposit.event!.deposit * globalP.P) /
 					lastPSGSnapshot.event!.P;
 			} else if (
 				scaleDiff === 1n ||
@@ -577,7 +587,7 @@ async function spliceStabilityPoolEventsFromPSAndG(
 				scaleDiff === maxUint128 * -1n
 			) {
 				compoundedStake =
-					(lastDeposit.event!.deposit * lastGlobalP.event!.P) /
+					(lastDeposit.event!.deposit * globalP.P) /
 					lastPSGSnapshot.event!.P /
 					global.SCALE_FACTOR;
 			} else {
@@ -593,32 +603,99 @@ async function spliceStabilityPoolEventsFromPSAndG(
 			}
 
 			lusdLoss = lastDeposit.event!.deposit - compoundedStake;
-
-			timeline.stabilityPool.splice(lastDeposit.index + 1, 0, {
-				deposit: lastDeposit.event!.deposit,
-				pendingEthGain: ethGain,
-				pendingLusdLoss: lusdLoss,
-				pendingLqtyReward: lqtyReward,
-				operation:
-					'3rdPartyLiquidationWithStabilityPoolOffset' as const,
-				blockNumber: globalG.blockNumber,
-				transactionIndex: globalG.transactionIndex,
-				timestamp: globalG.timestamp,
-				transactionHash: globalG.transactionHash
-			});
-		} else {
-			timeline.stabilityPool.splice(lastDeposit.index + 1, 0, {
-				deposit: lastDeposit.event!.deposit,
-				pendingEthGain: ethGain,
-				pendingLusdLoss: lusdLoss,
-				pendingLqtyReward: lqtyReward,
-				operation: '3rdPartyUserAction' as const,
-				blockNumber: globalG.blockNumber,
-				transactionIndex: globalG.transactionIndex,
-				timestamp: globalG.timestamp,
-				transactionHash: globalG.transactionHash
-			});
 		}
+
+		if (globalG) {
+			/** ----------------------------------------------------------------
+		 	 * LQTY Reward
+			 ---------------------------------------------------------------- */
+			// Every time G is updated, the pending lqty reward changes, but
+			// isn't applied until the user deposits or withdraws. Everytime a
+			// 3rd party user deposits or withdraws or when a liquidation
+			// happens G is updated
+			let firstPortionG = 0n;
+			let secondPortionG = 0n;
+
+			// If a scale change happened between the last deposit and the event
+			// scale changes are extremely rare and epochs virtually impossible, but
+			// add the logic for completeness
+			if (lastScaleSnapshot.event !== lastGlobalScale.event) {
+				const finalGAtDepositScale = await (async () => {
+					// If we compare against the deposit snapshots, then the final
+					// G will not be re-retrieved until next deposit. So use the
+					// global values as the test
+					const cachedScaleSameAsGlobal =
+						(lastGlobalScale.event?.scale ?? 0n) ===
+						cachedEpochAndScale.scale;
+
+					if (cachedScaleSameAsGlobal) {
+						return cachedGAtEpochAndScale;
+					} else {
+						cachedEpochAndScale = {
+							epoch: lastGlobalEpoch.event?.epoch ?? 0n,
+							scale: lastGlobalScale.event!.scale
+						};
+
+						cachedGAtEpochAndScale = await client.readContract({
+							address: protocols[protocol].stabilityPool,
+							abi: [
+								getAbiItem(
+									protocol,
+									'stabilityPool',
+									'epochToScaleToG'
+								)
+							],
+							functionName: 'epochToScaleToG',
+							args: [
+								lastGlobalEpoch.event?.epoch ?? 0n,
+								lastGlobalScale.event?.scale ?? 0n
+							]
+						});
+
+						return cachedGAtEpochAndScale;
+					}
+				})();
+
+				firstPortionG = finalGAtDepositScale - lastPSGSnapshot.event!.G;
+				secondPortionG = globalG.G / global.SCALE_FACTOR;
+			} else {
+				firstPortionG = globalG.G - lastPSGSnapshot.event!.G;
+				// secondPortionG stays 0n
+			}
+
+			const fullLqtyReward =
+				(lastDeposit.event!.deposit *
+					(firstPortionG + secondPortionG)) /
+				lastPSGSnapshot.event!.P /
+				global.DECIMAL_PRECISION;
+
+			// Find the kickback rate of the matching front end tag, else use 100%
+			const kickbackRate =
+				global.frontEndsRegistered.find(
+					(e) => e.frontEnd === lastFrontEndTag.event!.frontEndTag
+				)?.kickbackRate ?? global.DECIMAL_PRECISION;
+
+			lqtyReward =
+				(kickbackRate * fullLqtyReward) / global.DECIMAL_PRECISION;
+		}
+
+		timeline.stabilityPool.splice(lastDeposit.index + 1, 0, {
+			deposit: lastDeposit.event!.deposit,
+			pendingEthGain: ethGain,
+			pendingLusdLoss: lusdLoss,
+			pendingLqtyReward: lqtyReward,
+			operation: globalP
+				? ('3rdPartyLiquidationWithStabilityPoolOffset' as const)
+				: ('3rdPartyUserAction' as const),
+			blockNumber: globalG ? globalG.blockNumber : globalP.blockNumber,
+			transactionIndex: globalG
+				? globalG.transactionIndex
+				: globalP.transactionIndex,
+			timestamp: globalG ? globalG.timestamp : globalP.timestamp,
+			transactionHash: globalG
+				? globalG.transactionHash
+				: globalP.transactionHash
+		});
 	}
 }
 
@@ -722,7 +799,7 @@ function spliceLqtyStakingPoolEventsFromFTerms(
 type StateArray = (
 	| GlobalState[Exclude<
 		keyof GlobalState,
-		'DECIMAL_PRECISION' | 'SCALE_FACTOR'
+		'DECIMAL_PRECISION' | 'SCALE_FACTOR' | 'LUSD_GAS_COMPENSATION'
 	>]
 	| UserState[keyof UserState]
 	| Timeline[keyof Timeline]

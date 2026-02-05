@@ -12,6 +12,7 @@ export type GlobalState = {
 	// Constants
 	DECIMAL_PRECISION: bigint;
 	SCALE_FACTOR: bigint;
+	LUSD_GAS_COMPENSATION: bigint;
 
 	// Stability Pool
 	frontEndsRegistered: {
@@ -134,6 +135,25 @@ export async function getGlobalState(
 		functionName: 'SCALE_FACTOR'
 	});
 	await setCachedState(protocol, ['global', 'SCALE_FACTOR'], SCALE_FACTOR);
+
+	/** ------------------------------------------------------------------------
+	 * LUSD_GAS_COMPENSATION
+	 ------------------------------------------------------------------------ */
+	const LUSD_GAS_COMPENSATIONAbi = getAbiItem(
+		protocol,
+		'stabilityPool',
+		'LUSD_GAS_COMPENSATION'
+	);
+	const LUSD_GAS_COMPENSATION = await client.readContract({
+		address: protocols[protocol].stabilityPool,
+		abi: [LUSD_GAS_COMPENSATIONAbi],
+		functionName: 'LUSD_GAS_COMPENSATION'
+	});
+	await setCachedState(
+		protocol,
+		['global', 'LUSD_GAS_COMPENSATION'],
+		LUSD_GAS_COMPENSATION
+	);
 
 	/** ------------------------------------------------------------------------
 	 * frontEndsRegistered
@@ -373,6 +393,7 @@ export async function getGlobalState(
 	return {
 		DECIMAL_PRECISION,
 		SCALE_FACTOR,
+		LUSD_GAS_COMPENSATION,
 		frontEndsRegistered,
 		P,
 		S,

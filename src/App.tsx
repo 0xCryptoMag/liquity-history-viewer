@@ -14,29 +14,35 @@ import { CacheManager } from './CacheManager';
 import './index.css';
 
 function formatBigInt(value: bigint, precision: bigint): string {
-	const intPart = value / precision;
-	const fracPart = value % precision;
-	if (fracPart === 0n) return intPart.toString();
+	const negative = value < 0n;
+	const absValue = negative ? -value : value;
+	const intPart = absValue / precision;
+	const fracPart = absValue % precision;
+	if (fracPart === 0n) {
+		const str = intPart.toString();
+		return negative ? `-${str}` : str;
+	}
 	const decimals = precision.toString().length - 1;
 	const fracStr = fracPart
 		.toString()
 		.padStart(decimals, '0')
 		.replace(/0+$/, '');
-	return `${intPart}.${fracStr}`;
+	const result = `${intPart}.${fracStr}`;
+	return negative ? `-${result}` : result;
 }
 
 function formatTimestamp(timestamp: bigint): string {
 	const d = new Date(Number(timestamp) * 1000);
-	const month = d.toLocaleString('en-US', { month: 'short' });
-	const day = d.getDate().toString().padStart(2, '0');
-	const year = d.getFullYear();
-	const hour = d.getHours();
+	const month = d.toLocaleString('en-US', { month: 'short', timeZone: 'UTC' });
+	const day = d.getUTCDate().toString().padStart(2, '0');
+	const year = d.getUTCFullYear();
+	const hour = d.getUTCHours();
 	const ampm = hour >= 12 ? 'PM' : 'AM';
 	const hour12 = hour % 12 || 12;
 	const h = hour12.toString().padStart(2, '0');
-	const min = d.getMinutes().toString().padStart(2, '0');
-	const sec = d.getSeconds().toString().padStart(2, '0');
-	return `${month} ${day}, ${year} ${h}:${min}:${sec} ${ampm}`;
+	const min = d.getUTCMinutes().toString().padStart(2, '0');
+	const sec = d.getUTCSeconds().toString().padStart(2, '0');
+	return `${month} ${day}, ${year} ${h}:${min}:${sec} ${ampm} UTC`;
 }
 
 function serializeTimelineToJson(timeline: Timeline): string {
@@ -155,7 +161,7 @@ export function App() {
 	};
 
 	return (
-		<div className='max-w-7xl mx-auto p-8 text-left relative z-10'>
+		<div className='w-full max-w-[1920px] mx-auto px-3 py-4 text-left relative z-10'>
 			<h1 className='text-3xl font-bold mb-6'>Liquity History Viewer</h1>
 
 			<div className='flex gap-2 mb-6 border-b border-[#3a3a3a]'>
@@ -484,6 +490,42 @@ function TimelineView({
 	>('trove');
 	const [pageSize, setPageSize] = useState<25 | 50 | 100>(25);
 	const [page, setPage] = useState(1);
+	const [changeColumns, setChangeColumns] = useState<Set<string>>(new Set());
+
+	const toggleColumnChange = (columnKey: string) => {
+		setChangeColumns((prev) => {
+			const next = new Set(prev);
+			if (next.has(columnKey)) {
+				next.delete(columnKey);
+			} else {
+				next.add(columnKey);
+			}
+			return next;
+		});
+	};
+
+	const renderColumnHeader = (
+		columnKey: string,
+		title: string,
+		clickable: boolean = true
+	) => {
+		const isChangeMode = changeColumns.has(columnKey);
+		const displayTitle = isChangeMode ? `${title} Δ` : title;
+
+		if (!clickable) {
+			return <th className='p-2'>{displayTitle}</th>;
+		}
+
+		return (
+			<th
+				className='p-2 cursor-pointer hover:bg-[#3a3a3a] select-none'
+				onClick={() => toggleColumnChange(columnKey)}
+				title='Click to toggle between value and change'
+			>
+				{displayTitle}
+			</th>
+		);
+	};
 
 	const streams = [
 		{ id: 'trove' as const, label: 'Trove', data: timeline.trove },
@@ -552,77 +594,178 @@ function TimelineView({
 								<table className='w-full text-sm text-left'>
 									<thead className='bg-[#2a2a2a] text-[#fbf0df]'>
 										<tr>
-											<th className='p-2'>Time</th>
-											<th className='p-2'>Block</th>
-											<th className='p-2'>Tx</th>
-											<th className='p-2'>Operation</th>
-											<th className='p-2'>coll</th>
-											<th className='p-2'>debt</th>
-											<th className='p-2'>collPending</th>
-											<th className='p-2'>debtPending</th>
+											{renderColumnHeader(
+												'',
+												'Time',
+												false
+											)}
+											{renderColumnHeader(
+												'',
+												'Block',
+												false
+											)}
+											{renderColumnHeader(
+												'',
+												'Tx',
+												false
+											)}
+											{renderColumnHeader(
+												'',
+												'Operation',
+												false
+											)}
+											{renderColumnHeader(
+												'trove.coll',
+												'coll'
+											)}
+											{renderColumnHeader(
+												'trove.debt',
+												'debt'
+											)}
+											{renderColumnHeader(
+												'trove.collPending',
+												'collPending'
+											)}
+											{renderColumnHeader(
+												'trove.debtPending',
+												'debtPending'
+											)}
 										</tr>
 									</thead>
 									<tbody className='text-[#fbf0df]/90 font-mono'>
-										{slice.map((e, i) => (
-											<tr
-												key={
-													(currentPage - 1) *
-														pageSize +
-													i
-												}
-												className='border-t border-[#3a3a3a]'
-											>
-												<td className='p-2'>
-													{formatTimestamp(
-														e.timestamp
-													)}
-												</td>
-												<td className='p-2'>
-													{e.blockNumber.toString()}
-												</td>
-												<td className='p-2'>
-													{e.transactionHash ? (
-														<a
-															href={`${explorerTxUrl}${e.transactionHash}`}
-															target='_blank'
-															rel='noopener noreferrer'
-															className='text-[#7eb8da] hover:underline break-all'
-														>
-															{e.transactionHash.slice(0, 10)}…
-														</a>
-													) : (
-														'—'
-													)}
-												</td>
-												<td className='p-2'>
-													{e.operation}
-												</td>
-												<td className='p-2'>
-													{formatBigInt(
-														e.coll,
-														decimalPrecision
-													)}
-												</td>
-												<td className='p-2'>
-													{formatBigInt(
-														e.debt,
-														decimalPrecision
-													)}
-												</td>
-												<td className='p-2'>
-													{formatBigInt(
-														e.collPending,
-														decimalPrecision
-													)}
-												</td>
-												<td className='p-2'>
-													{formatBigInt(
-														e.debtPending,
-														decimalPrecision
-													)}
-												</td>
-											</tr>
-										))}
+										{slice.map((e, i) => {
+											const globalIndex =
+												(currentPage - 1) * pageSize +
+												i;
+											const prevColl =
+												globalIndex > 0
+													? data[globalIndex - 1]!
+															.coll
+													: 0n;
+											const prevDebt =
+												globalIndex > 0
+													? data[globalIndex - 1]!
+															.debt
+													: 0n;
+											const prevCollPending =
+												globalIndex > 0
+													? data[globalIndex - 1]!
+															.collPending
+													: 0n;
+											const prevDebtPending =
+												globalIndex > 0
+													? data[globalIndex - 1]!
+															.debtPending
+													: 0n;
+
+											const showCollChange =
+												changeColumns.has('trove.coll');
+											const showDebtChange =
+												changeColumns.has('trove.debt');
+											const showCollPendingChange =
+												changeColumns.has(
+													'trove.collPending'
+												);
+											const showDebtPendingChange =
+												changeColumns.has(
+													'trove.debtPending'
+												);
+
+											return (
+												<tr
+													key={globalIndex}
+													className='border-t border-[#3a3a3a]'
+												>
+													<td className='p-2'>
+														{formatTimestamp(
+															e.timestamp
+														)}
+													</td>
+													<td className='p-2'>
+														{e.blockNumber.toString()}
+													</td>
+													<td className='p-2'>
+														{e.transactionHash ? (
+															<a
+																href={`${explorerTxUrl}${e.transactionHash}`}
+																target='_blank'
+																rel='noopener noreferrer'
+																className='text-[#7eb8da] hover:underline break-all'
+															>
+																{e.transactionHash.slice(
+																	0,
+																	10
+																)}
+																…
+															</a>
+														) : (
+															'—'
+														)}
+													</td>
+													<td className='p-2'>
+														{e.operation}
+													</td>
+													<td className='p-2'>
+														{showCollChange
+															? prevColl !== null
+																? formatBigInt(
+																		e.coll -
+																			prevColl,
+																		decimalPrecision
+																  )
+																: '—'
+															: formatBigInt(
+																	e.coll,
+																	decimalPrecision
+															  )}
+													</td>
+													<td className='p-2'>
+														{showDebtChange
+															? prevDebt !== null
+																? formatBigInt(
+																		e.debt -
+																			prevDebt,
+																		decimalPrecision
+																  )
+																: '—'
+															: formatBigInt(
+																	e.debt,
+																	decimalPrecision
+															  )}
+													</td>
+													<td className='p-2'>
+														{showCollPendingChange
+															? prevCollPending !==
+															  null
+																? formatBigInt(
+																		e.collPending -
+																			prevCollPending,
+																		decimalPrecision
+																  )
+																: '—'
+															: formatBigInt(
+																	e.collPending,
+																	decimalPrecision
+															  )}
+													</td>
+													<td className='p-2'>
+														{showDebtPendingChange
+															? prevDebtPending !==
+															  null
+																? formatBigInt(
+																		e.debtPending -
+																			prevDebtPending,
+																		decimalPrecision
+																  )
+																: '—'
+															: formatBigInt(
+																	e.debtPending,
+																	decimalPrecision
+															  )}
+													</td>
+												</tr>
+											);
+										})}
 									</tbody>
 								</table>
 							</div>
@@ -656,83 +799,184 @@ function TimelineView({
 								<table className='w-full text-sm text-left'>
 									<thead className='bg-[#2a2a2a] text-[#fbf0df]'>
 										<tr>
-											<th className='p-2'>Time</th>
-											<th className='p-2'>Block</th>
-											<th className='p-2'>Tx</th>
-											<th className='p-2'>Operation</th>
-											<th className='p-2'>deposit</th>
-											<th className='p-2'>
-												pendingEthGain
-											</th>
-											<th className='p-2'>
-												pendingDepositLoss
-											</th>
-											<th className='p-2'>
-												pendingLqtyReward
-											</th>
+											{renderColumnHeader(
+												'',
+												'Time',
+												false
+											)}
+											{renderColumnHeader(
+												'',
+												'Block',
+												false
+											)}
+											{renderColumnHeader(
+												'',
+												'Tx',
+												false
+											)}
+											{renderColumnHeader(
+												'',
+												'Operation',
+												false
+											)}
+											{renderColumnHeader(
+												'stabilityPool.deposit',
+												'deposit'
+											)}
+											{renderColumnHeader(
+												'stabilityPool.pendingEthGain',
+												'pendingEthGain'
+											)}
+											{renderColumnHeader(
+												'stabilityPool.pendingLusdLoss',
+												'pendingDepositLoss'
+											)}
+											{renderColumnHeader(
+												'stabilityPool.pendingLqtyReward',
+												'pendingLqtyReward'
+											)}
 										</tr>
 									</thead>
 									<tbody className='text-[#fbf0df]/90 font-mono'>
-										{slice.map((e, i) => (
-											<tr
-												key={
-													(currentPage - 1) *
-														pageSize +
-													i
-												}
-												className='border-t border-[#3a3a3a]'
-											>
-												<td className='p-2'>
-													{formatTimestamp(
-														e.timestamp
-													)}
-												</td>
-												<td className='p-2'>
-													{e.blockNumber.toString()}
-												</td>
-												<td className='p-2'>
-													{e.transactionHash ? (
-														<a
-															href={`${explorerTxUrl}${e.transactionHash}`}
-															target='_blank'
-															rel='noopener noreferrer'
-															className='text-[#7eb8da] hover:underline break-all'
-														>
-															{e.transactionHash.slice(0, 10)}…
-														</a>
-													) : (
-														'—'
-													)}
-												</td>
-												<td className='p-2'>
-													{e.operation}
-												</td>
-												<td className='p-2'>
-													{formatBigInt(
-														e.deposit,
-														decimalPrecision
-													)}
-												</td>
-												<td className='p-2'>
-													{formatBigInt(
-														e.pendingEthGain,
-														decimalPrecision
-													)}
-												</td>
-												<td className='p-2'>
-													{formatBigInt(
-														e.pendingLusdLoss,
-														decimalPrecision
-													)}
-												</td>
-												<td className='p-2'>
-													{formatBigInt(
-														e.pendingLqtyReward,
-														decimalPrecision
-													)}
-												</td>
-											</tr>
-										))}
+										{slice.map((e, i) => {
+											const globalIndex =
+												(currentPage - 1) * pageSize +
+												i;
+											const prevDeposit =
+												globalIndex > 0
+													? data[globalIndex - 1]!
+															.deposit
+													: 0n;
+											const prevPendingEthGain =
+												globalIndex > 0
+													? data[globalIndex - 1]!
+															.pendingEthGain
+													: 0n;
+											const prevPendingLusdLoss =
+												globalIndex > 0
+													? data[globalIndex - 1]!
+															.pendingLusdLoss
+													: 0n;
+											const prevPendingLqtyReward =
+												globalIndex > 0
+													? data[globalIndex - 1]!
+															.pendingLqtyReward
+													: 0n;
+
+											const showDepositChange =
+												changeColumns.has(
+													'stabilityPool.deposit'
+												);
+											const showPendingEthGainChange =
+												changeColumns.has(
+													'stabilityPool.pendingEthGain'
+												);
+											const showPendingLusdLossChange =
+												changeColumns.has(
+													'stabilityPool.pendingLusdLoss'
+												);
+											const showPendingLqtyRewardChange =
+												changeColumns.has(
+													'stabilityPool.pendingLqtyReward'
+												);
+
+											return (
+												<tr
+													key={globalIndex}
+													className='border-t border-[#3a3a3a]'
+												>
+													<td className='p-2'>
+														{formatTimestamp(
+															e.timestamp
+														)}
+													</td>
+													<td className='p-2'>
+														{e.blockNumber.toString()}
+													</td>
+													<td className='p-2'>
+														{e.transactionHash ? (
+															<a
+																href={`${explorerTxUrl}${e.transactionHash}`}
+																target='_blank'
+																rel='noopener noreferrer'
+																className='text-[#7eb8da] hover:underline break-all'
+															>
+																{e.transactionHash.slice(
+																	0,
+																	10
+																)}
+																…
+															</a>
+														) : (
+															'—'
+														)}
+													</td>
+													<td className='p-2'>
+														{e.operation}
+													</td>
+													<td className='p-2'>
+														{showDepositChange
+															? prevDeposit !==
+															  null
+																? formatBigInt(
+																		e.deposit -
+																			prevDeposit,
+																		decimalPrecision
+																  )
+																: '—'
+															: formatBigInt(
+																	e.deposit,
+																	decimalPrecision
+															  )}
+													</td>
+													<td className='p-2'>
+														{showPendingEthGainChange
+															? prevPendingEthGain !==
+															  null
+																? formatBigInt(
+																		e.pendingEthGain -
+																			prevPendingEthGain,
+																		decimalPrecision
+																  )
+																: '—'
+															: formatBigInt(
+																	e.pendingEthGain,
+																	decimalPrecision
+															  )}
+													</td>
+													<td className='p-2'>
+														{showPendingLusdLossChange
+															? prevPendingLusdLoss !==
+															  null
+																? formatBigInt(
+																		e.pendingLusdLoss -
+																			prevPendingLusdLoss,
+																		decimalPrecision
+																  )
+																: '—'
+															: formatBigInt(
+																	e.pendingLusdLoss,
+																	decimalPrecision
+															  )}
+													</td>
+													<td className='p-2'>
+														{showPendingLqtyRewardChange
+															? prevPendingLqtyReward !==
+															  null
+																? formatBigInt(
+																		e.pendingLqtyReward -
+																			prevPendingLqtyReward,
+																		decimalPrecision
+																  )
+																: '—'
+															: formatBigInt(
+																	e.pendingLqtyReward,
+																	decimalPrecision
+															  )}
+													</td>
+												</tr>
+											);
+										})}
 									</tbody>
 								</table>
 							</div>
@@ -766,74 +1010,155 @@ function TimelineView({
 								<table className='w-full text-sm text-left'>
 									<thead className='bg-[#2a2a2a] text-[#fbf0df]'>
 										<tr>
-											<th className='p-2'>Time</th>
-											<th className='p-2'>Block</th>
-											<th className='p-2'>Tx</th>
-											<th className='p-2'>Operation</th>
-											<th className='p-2'>stake</th>
-											<th className='p-2'>
-												pendingEthGain
-											</th>
-											<th className='p-2'>
-												pendingLusdGain
-											</th>
+											{renderColumnHeader(
+												'',
+												'Time',
+												false
+											)}
+											{renderColumnHeader(
+												'',
+												'Block',
+												false
+											)}
+											{renderColumnHeader(
+												'',
+												'Tx',
+												false
+											)}
+											{renderColumnHeader(
+												'',
+												'Operation',
+												false
+											)}
+											{renderColumnHeader(
+												'lqtyStakingPool.stake',
+												'stake'
+											)}
+											{renderColumnHeader(
+												'lqtyStakingPool.pendingEthGain',
+												'pendingEthGain'
+											)}
+											{renderColumnHeader(
+												'lqtyStakingPool.pendingLusdGain',
+												'pendingLusdGain'
+											)}
 										</tr>
 									</thead>
 									<tbody className='text-[#fbf0df]/90 font-mono'>
-										{slice.map((e, i) => (
-											<tr
-												key={
-													(currentPage - 1) *
-														pageSize +
-													i
-												}
-												className='border-t border-[#3a3a3a]'
-											>
-												<td className='p-2'>
-													{formatTimestamp(
-														e.timestamp
-													)}
-												</td>
-												<td className='p-2'>
-													{e.blockNumber.toString()}
-												</td>
-												<td className='p-2'>
-													{e.transactionHash ? (
-														<a
-															href={`${explorerTxUrl}${e.transactionHash}`}
-															target='_blank'
-															rel='noopener noreferrer'
-															className='text-[#7eb8da] hover:underline break-all'
-														>
-															{e.transactionHash.slice(0, 10)}…
-														</a>
-													) : (
-														'—'
-													)}
-												</td>
-												<td className='p-2'>
-													{e.operation}
-												</td>
-												<td className='p-2'>
-													{formatBigInt(
-														e.stake,
-														decimalPrecision
-													)}
-												</td>
-												<td className='p-2'>
-													{formatBigInt(
-														e.pendingEthGain,
-														decimalPrecision
-													)}
-												</td>
-												<td className='p-2'>
-													{formatBigInt(
-														e.pendingLusdGain,
-														decimalPrecision
-													)}
-												</td>
-											</tr>
-										))}
+										{slice.map((e, i) => {
+											const globalIndex =
+												(currentPage - 1) * pageSize +
+												i;
+											const prevStake =
+												globalIndex > 0
+													? data[globalIndex - 1]!
+															.stake
+													: 0n;
+											const prevPendingEthGain =
+												globalIndex > 0
+													? data[globalIndex - 1]!
+															.pendingEthGain
+													: 0n;
+											const prevPendingLusdGain =
+												globalIndex > 0
+													? data[globalIndex - 1]!
+															.pendingLusdGain
+													: 0n;
+
+											const showStakeChange =
+												changeColumns.has(
+													'lqtyStakingPool.stake'
+												);
+											const showPendingEthGainChange =
+												changeColumns.has(
+													'lqtyStakingPool.pendingEthGain'
+												);
+											const showPendingLusdGainChange =
+												changeColumns.has(
+													'lqtyStakingPool.pendingLusdGain'
+												);
+
+											return (
+												<tr
+													key={globalIndex}
+													className='border-t border-[#3a3a3a]'
+												>
+													<td className='p-2'>
+														{formatTimestamp(
+															e.timestamp
+														)}
+													</td>
+													<td className='p-2'>
+														{e.blockNumber.toString()}
+													</td>
+													<td className='p-2'>
+														{e.transactionHash ? (
+															<a
+																href={`${explorerTxUrl}${e.transactionHash}`}
+																target='_blank'
+																rel='noopener noreferrer'
+																className='text-[#7eb8da] hover:underline break-all'
+															>
+																{e.transactionHash.slice(
+																	0,
+																	10
+																)}
+																…
+															</a>
+														) : (
+															'—'
+														)}
+													</td>
+													<td className='p-2'>
+														{e.operation}
+													</td>
+													<td className='p-2'>
+														{showStakeChange
+															? prevStake !== null
+																? formatBigInt(
+																		e.stake -
+																			prevStake,
+																		decimalPrecision
+																  )
+																: '—'
+															: formatBigInt(
+																	e.stake,
+																	decimalPrecision
+															  )}
+													</td>
+													<td className='p-2'>
+														{showPendingEthGainChange
+															? prevPendingEthGain !==
+															  null
+																? formatBigInt(
+																		e.pendingEthGain -
+																			prevPendingEthGain,
+																		decimalPrecision
+																  )
+																: '—'
+															: formatBigInt(
+																	e.pendingEthGain,
+																	decimalPrecision
+															  )}
+													</td>
+													<td className='p-2'>
+														{showPendingLusdGainChange
+															? prevPendingLusdGain !==
+															  null
+																? formatBigInt(
+																		e.pendingLusdGain -
+																			prevPendingLusdGain,
+																		decimalPrecision
+																  )
+																: '—'
+															: formatBigInt(
+																	e.pendingLusdGain,
+																	decimalPrecision
+															  )}
+													</td>
+												</tr>
+											);
+										})}
 									</tbody>
 								</table>
 							</div>
@@ -867,56 +1192,100 @@ function TimelineView({
 								<table className='w-full text-sm text-left'>
 									<thead className='bg-[#2a2a2a] text-[#fbf0df]'>
 										<tr>
-											<th className='p-2'>Time</th>
-											<th className='p-2'>Block</th>
-											<th className='p-2'>Tx</th>
-											<th className='p-2'>Operation</th>
-											<th className='p-2'>surplus</th>
+											{renderColumnHeader(
+												'',
+												'Time',
+												false
+											)}
+											{renderColumnHeader(
+												'',
+												'Block',
+												false
+											)}
+											{renderColumnHeader(
+												'',
+												'Tx',
+												false
+											)}
+											{renderColumnHeader(
+												'',
+												'Operation',
+												false
+											)}
+											{renderColumnHeader(
+												'collateralSurplusPool.surplus',
+												'surplus'
+											)}
 										</tr>
 									</thead>
 									<tbody className='text-[#fbf0df]/90 font-mono'>
-										{slice.map((e, i) => (
-											<tr
-												key={
-													(currentPage - 1) *
-														pageSize +
-													i
-												}
-												className='border-t border-[#3a3a3a]'
-											>
-												<td className='p-2'>
-													{formatTimestamp(
-														e.timestamp
-													)}
-												</td>
-												<td className='p-2'>
-													{e.blockNumber.toString()}
-												</td>
-												<td className='p-2'>
-													{e.transactionHash ? (
-														<a
-															href={`${explorerTxUrl}${e.transactionHash}`}
-															target='_blank'
-															rel='noopener noreferrer'
-															className='text-[#7eb8da] hover:underline break-all'
-														>
-															{e.transactionHash.slice(0, 10)}…
-														</a>
-													) : (
-														'—'
-													)}
-												</td>
-												<td className='p-2'>
-													{e.operation}
-												</td>
-												<td className='p-2'>
-													{formatBigInt(
-														e.surplus,
-														decimalPrecision
-													)}
-												</td>
-											</tr>
-										))}
+										{slice.map((e, i) => {
+											const globalIndex =
+												(currentPage - 1) * pageSize +
+												i;
+											const prevSurplus =
+												globalIndex > 0
+													? data[globalIndex - 1]!
+															.surplus
+													: 0n;
+
+											const showSurplusChange =
+												changeColumns.has(
+													'collateralSurplusPool.surplus'
+												);
+
+											return (
+												<tr
+													key={globalIndex}
+													className='border-t border-[#3a3a3a]'
+												>
+													<td className='p-2'>
+														{formatTimestamp(
+															e.timestamp
+														)}
+													</td>
+													<td className='p-2'>
+														{e.blockNumber.toString()}
+													</td>
+													<td className='p-2'>
+														{e.transactionHash ? (
+															<a
+																href={`${explorerTxUrl}${e.transactionHash}`}
+																target='_blank'
+																rel='noopener noreferrer'
+																className='text-[#7eb8da] hover:underline break-all'
+															>
+																{e.transactionHash.slice(
+																	0,
+																	10
+																)}
+																…
+															</a>
+														) : (
+															'—'
+														)}
+													</td>
+													<td className='p-2'>
+														{e.operation}
+													</td>
+													<td className='p-2'>
+														{showSurplusChange
+															? prevSurplus !==
+															  null
+																? formatBigInt(
+																		e.surplus -
+																			prevSurplus,
+																		decimalPrecision
+																  )
+																: '—'
+															: formatBigInt(
+																	e.surplus,
+																	decimalPrecision
+															  )}
+													</td>
+												</tr>
+											);
+										})}
 									</tbody>
 								</table>
 							</div>

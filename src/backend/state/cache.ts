@@ -464,6 +464,10 @@ export async function exportGlobalCache(
 		'global',
 		'SCALE_FACTOR'
 	]);
+	const LUSD_GAS_COMPENSATION = await getCachedState<bigint>(protocol, [
+		'global',
+		'LUSD_GAS_COMPENSATION'
+	]);
 
 	const lastFetchedBlocks: Record<string, bigint | null> = {};
 	const arrays: Record<string, unknown[]> = {};
@@ -480,6 +484,7 @@ export async function exportGlobalCache(
 	const obj = {
 		DECIMAL_PRECISION,
 		SCALE_FACTOR,
+		LUSD_GAS_COMPENSATION,
 		...arrays,
 		lastFetchedBlocks
 	};
@@ -523,6 +528,7 @@ export async function importGlobalCache(
 	const obj = deserializeBigInt(raw) as {
 		DECIMAL_PRECISION?: bigint | null;
 		SCALE_FACTOR?: bigint | null;
+		LUSD_GAS_COMPENSATION?: bigint | null;
 		[key: string]: unknown;
 	};
 
@@ -540,6 +546,13 @@ export async function importGlobalCache(
 			protocol,
 			['global', 'SCALE_FACTOR'],
 			obj.SCALE_FACTOR
+		);
+	}
+	if (obj.LUSD_GAS_COMPENSATION != null) {
+		await setCachedState(
+			protocol,
+			['global', 'LUSD_GAS_COMPENSATION'],
+			obj.LUSD_GAS_COMPENSATION
 		);
 	}
 

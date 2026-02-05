@@ -26,6 +26,13 @@ export type UserState = {
 		timestamp: bigint;
 		transactionHash: Hash;
 	}[];
+	borrowingFees: {
+		fee: bigint;
+		blockNumber: bigint;
+		transactionIndex: number;
+		timestamp: bigint;
+		transactionHash: Hash;
+	}[];
 
 	// Coll Surplus Pool
 	collSurplusBalance: {
@@ -133,6 +140,57 @@ export async function getUserState(
 				debt: e.args._debt!,
 				stake: e.args.stake!,
 				operation: borrowerOperationEnum[e.args.operation!]!,
+				blockNumber: e.blockNumber,
+				transactionIndex: e.transactionIndex,
+				timestamp: e.blockTimestamp!,
+				transactionHash: e.transactionHash
+			};
+		}
+	});
+
+	/** ------------------------------------------------------------------------
+	 * borrowingFees
+	 ------------------------------------------------------------------------ */
+	progress?.('Retrieving user borrowing fees paid');
+	const borrowingFeesBlockNumbers = await getBlockNumbersForEvents(
+		{
+			protocol,
+			keyPath: [userAddress, 'borrowingFees']
+		},
+		{
+			array: userTroveUpdates,
+			filter: (lastBlockNumber: bigint) => {
+				return (e: UserState['userTroveUpdates'][number]) => {
+					return e.blockNumber > lastBlockNumber;
+				};
+			}
+		}
+	);
+
+	const borrowingFees = await getCacheAndTransformEventsFromBlockNumbers({
+		...commonArgs,
+		contract: 'borrowerOperations',
+		normalItemName: 'LUSDBorrowingFeePaid',
+		args: {
+			_borrower: userAddress
+		},
+		blockNumbers: borrowingFeesBlockNumbers,
+		blockNumberToTimestampMap,
+		keyPath: [userAddress, 'borrowingFees'],
+		transform: (e) => {
+			const _LUSD_FEE = replaceBrandedWordsInString(
+				'_LUSD_FEE',
+				protocols[protocol].modifiers
+			) as ReplaceBrandedWordsInStringForAllProtocols<'_LUSD_FEE'>;
+
+			const lusdFee = e.args[
+				_LUSD_FEE as keyof typeof e.args
+			] as ExtractUnionValue<
+				typeof e.args,
+				ReplaceBrandedWordsInStringForAllProtocols<'_LUSD_FEE'>
+			>;
+			return {
+				fee: lusdFee!,
 				blockNumber: e.blockNumber,
 				transactionIndex: e.transactionIndex,
 				timestamp: e.blockTimestamp!,
@@ -467,6 +525,7 @@ export async function getUserState(
 
 	return {
 		userTroveUpdates,
+		borrowingFees,
 		collSurplusBalance,
 		depositUpdates,
 		PSGSnapshots,
