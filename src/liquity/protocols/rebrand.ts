@@ -136,7 +136,7 @@ export function replaceBrandedWordsInString<
 	let result: string = str;
 
 	for (const word of brandedWords) {
-		const regex = new RegExp(`(\\b${word}\\b|${word}(?=[A-Z]))`, 'gi');
+		const regex = new RegExp(`(\\b${word}\\b|${word}(?=[A-Z_]))`, 'gi');
 		let match: RegExpExecArray | null;
 
 		const matches: { index: number; text: string }[] = [];

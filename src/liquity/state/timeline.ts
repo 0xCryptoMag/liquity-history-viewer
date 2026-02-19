@@ -11,27 +11,12 @@ import { isAfter, isSameTxn, isBefore } from '../utils/helpers.js';
 import { getAbiItem } from '../protocols/modify.js';
 import { protocols } from '../protocols/protocols.js';
 
-export type TimelineOptions = {
-	applyPendingTroveFromEmptyPoolLiquidation?: boolean;
-	applyPendingLqtyFrom3rdPartyStabilityPool?: boolean;
-	applyPendingStabilityPoolFromLiquidation?: boolean;
-	applyPendingEthGainFromRedemption?: boolean;
-	applyPendingLusdGainFromDepositFee?: boolean;
-};
-
-const defaultTimelineOptions: Required<TimelineOptions> = {
-	applyPendingTroveFromEmptyPoolLiquidation: true,
-	applyPendingLqtyFrom3rdPartyStabilityPool: false,
-	applyPendingStabilityPoolFromLiquidation: true,
-	applyPendingEthGainFromRedemption: false,
-	applyPendingLusdGainFromDepositFee: false
-};
-
 export type Timeline = {
 	trove: {
 		coll: bigint;
 		debt: bigint;
 		stake: bigint;
+		collSurplus: bigint;
 		fees: bigint;
 		lusdGasComp: bigint;
 		collPending: bigint;
@@ -39,7 +24,8 @@ export type Timeline = {
 		operation:
 			| (typeof borrowerOperationEnum)[number]
 			| (typeof troveManagerOperationEnum)[number]
-			| '3rdPartyLiquidationWithEmptyStabilityPool';
+			| '3rdPartyLiquidationWithEmptyStabilityPool'
+			| 'collSurplusClaimed';
 		blockNumber: bigint;
 		transactionIndex: number;
 		timestamp: bigint;
@@ -50,6 +36,7 @@ export type Timeline = {
 		pendingEthGain: bigint;
 		pendingLusdLoss: bigint;
 		pendingLqtyReward: bigint;
+		lqtyPaidOut: bigint; // this keeps accruing even up to next user action, so must track actual payouts
 		operation:
 			| 'UserAction'
 			| '3rdPartyUserAction'
@@ -72,26 +59,14 @@ export type Timeline = {
 		timestamp: bigint;
 		transactionHash: Hash;
 	}[];
-	collateralSurplusPool: {
-		surplus: bigint;
-		operation:
-			| 'CollClaimed'
-			| 'TroveRedeemedToCloseOrLiquidatedInRecoveryMode';
-		blockNumber: bigint;
-		transactionIndex: number;
-		timestamp: bigint;
-		transactionHash: Hash;
-	}[];
 };
 
 export async function constructTimeline(
 	protocol: ProtocolName,
 	userAddress: Address,
-	options?: TimelineOptions,
 	progress?: (message: string) => void
 ) {
 	const client = createClient(protocol);
-	const opts = { ...defaultTimelineOptions, ...options };
 
 	// no need to cache blockNumber to timestamp, once a protocol is synced,
 	// the timestamp is cached with the event
@@ -111,15 +86,43 @@ export async function constructTimeline(
 		(key) => progress?.('User: ' + key)
 	);
 
-	// Start with user state changes
+	progress?.('Building timeline…');
+
+	let collSurplusIndex = 0;
+	let feesIndex = 0;
+
+	// Start with user state changes. We track 3 state objects, the trove,
+	// stability pool, and lqty staking pool. Coll surplus is integrated into
+	// the trove since it is defined as the *trove's* surplus after forced
+	// closure from redemptions or certain recovery mode liquidations
 	const timeline: Timeline = {
 		trove: [
-			...user.userTroveUpdates.map((e) => {
+			...user.userTroveUpdates.map((e, i) => {
+				const lastCollSurplus = getEventBeforeComparator({
+					comparator: e,
+					eventArray: user.collSurplusBalance,
+					startIndex: collSurplusIndex,
+					takeEventInSameTxnIndex: false
+				});
+				collSurplusIndex =
+					i !== user.userTroveUpdates.length - 1
+						? lastCollSurplus.index
+						: 0;
+
+				const lastFees = getEventBeforeComparator({
+					comparator: e,
+					eventArray: user.borrowingFees,
+					startIndex: feesIndex,
+					takeEventInSameTxnIndex: true
+				});
+				feesIndex = lastFees.index;
+
 				return {
 					coll: e.coll,
 					debt: e.debt,
 					stake: e.stake,
-					fees: 0n,
+					collSurplus: 0n,
+					fees: lastFees.event!.fee,
 					lusdGasComp:
 						e.coll > 0n ? global.LUSD_GAS_COMPENSATION : 0n,
 					collPending: 0n,
@@ -132,10 +135,19 @@ export async function constructTimeline(
 				};
 			}),
 			...user.systemTroveUpdates.map((e) => {
+				const lastCollSurplus = getEventBeforeComparator({
+					comparator: e,
+					eventArray: user.collSurplusBalance,
+					startIndex: 0,
+					takeEventInSameTxnIndex: false
+				});
+				collSurplusIndex = lastCollSurplus.index;
+
 				return {
 					coll: e.coll,
 					debt: e.debt,
 					stake: e.stake,
+					collSurplus: 0n,
 					fees: 0n,
 					lusdGasComp:
 						e.coll > 0n ? global.LUSD_GAS_COMPENSATION : 0n,
@@ -147,20 +159,52 @@ export async function constructTimeline(
 					timestamp: e.timestamp,
 					transactionHash: e.transactionHash
 				};
-			})
+			}),
+			...user.collSurplusBalance
+				.map((e) => {
+					if (e.surplus !== 0n) return null;
+
+					return {
+						coll: 0n,
+						debt: 0n,
+						stake: 0n,
+						collSurplus: e.surplus,
+						fees: 0n,
+						lusdGasComp: 0n,
+						collPending: 0n,
+						debtPending: 0n,
+						operation: 'collSurplusClaimed' as const,
+						blockNumber: e.blockNumber,
+						transactionIndex: e.transactionIndex,
+						timestamp: e.timestamp,
+						transactionHash: e.transactionHash
+					};
+				})
+				.filter((e) => e !== null)
 		].sort((a, b) => {
 			if (a.blockNumber === b.blockNumber) {
 				return a.transactionIndex - b.transactionIndex;
 			}
-			return Number(a.blockNumber - b.blockNumber);
+			return a.blockNumber < b.blockNumber ? -1 : 1;
 		}),
 		stabilityPool: [
 			...user.depositUpdates.map((e) => {
+				const lastLqtyPayout = getEventBeforeComparator({
+					comparator: e,
+					eventArray: user.lqtyPayouts,
+					startIndex: 0,
+					takeEventInSameTxnIndex: true
+				});
+
+				const isSameTx =
+					lastLqtyPayout.event && isSameTxn(e, lastLqtyPayout.event);
+
 				return {
 					deposit: e.deposit,
 					pendingEthGain: 0n,
 					pendingLusdLoss: 0n,
 					pendingLqtyReward: 0n,
+					lqtyPaidOut: isSameTx ? lastLqtyPayout.event!.amount : 0n,
 					operation: 'UserAction' as const,
 					blockNumber: e.blockNumber,
 					transactionIndex: e.transactionIndex,
@@ -182,26 +226,10 @@ export async function constructTimeline(
 					transactionHash: e.transactionHash
 				};
 			})
-		],
-		collateralSurplusPool: [
-			...user.collSurplusBalance.map((e) => {
-				return {
-					surplus: e.surplus,
-					operation:
-						e.surplus === 0n
-							? ('CollClaimed' as const)
-							: ('TroveRedeemedToCloseOrLiquidatedInRecoveryMode' as const),
-					blockNumber: e.blockNumber,
-					transactionIndex: e.transactionIndex,
-					timestamp: e.timestamp,
-					transactionHash: e.transactionHash
-				};
-			})
 		]
 	};
 
 	// Then apply global state changes
-	progress?.('Building timeline…');
 	spliceTroveEventsFromLTerms(timeline, global, user);
 	await spliceStabilityPoolEventsFromPSAndG(
 		timeline,
@@ -211,33 +239,6 @@ export async function constructTimeline(
 		protocol
 	);
 	spliceLqtyStakingPoolEventsFromFTerms(timeline, global, user);
-
-	// Post-pass: filter entries by options
-	if (!opts.applyPendingTroveFromEmptyPoolLiquidation) {
-		timeline.trove = timeline.trove.filter(
-			(e) => e.operation !== '3rdPartyLiquidationWithEmptyStabilityPool'
-		);
-	}
-	if (!opts.applyPendingLqtyFrom3rdPartyStabilityPool) {
-		timeline.stabilityPool = timeline.stabilityPool.filter(
-			(e) => e.operation !== '3rdPartyUserAction'
-		);
-	}
-	if (!opts.applyPendingStabilityPoolFromLiquidation) {
-		timeline.stabilityPool = timeline.stabilityPool.filter(
-			(e) => e.operation !== '3rdPartyLiquidationWithStabilityPoolOffset'
-		);
-	}
-	if (!opts.applyPendingEthGainFromRedemption) {
-		timeline.lqtyStakingPool = timeline.lqtyStakingPool.filter(
-			(e) => e.operation !== '3rdPartyRedemptionFeePaid'
-		);
-	}
-	if (!opts.applyPendingLusdGainFromDepositFee) {
-		timeline.lqtyStakingPool = timeline.lqtyStakingPool.filter(
-			(e) => e.operation !== '3rdPartyDepositFeePaid'
-		);
-	}
 
 	return {
 		timeline,
@@ -262,7 +263,7 @@ function spliceTroveEventsFromLTerms(
 	for (const globalLTerms of global.LTerms) {
 		if (isBefore(globalLTerms, timeline.trove[0]!)) continue;
 
-		const lastTrove = getEventBeforComparator({
+		const lastTrove = getEventBeforeComparator({
 			comparator: globalLTerms,
 			eventArray: timeline.trove,
 			startIndex: cachedTrove.index,
@@ -281,7 +282,7 @@ function spliceTroveEventsFromLTerms(
 
 		if (lastTrove.event!.coll === 0n) continue;
 
-		const lastLTermsSnapshot = getEventBeforComparator({
+		const lastLTermsSnapshot = getEventBeforeComparator({
 			comparator: globalLTerms,
 			eventArray: user.LTermsSnapshots,
 			startIndex: cachedLTermSnapshotIndex,
@@ -289,7 +290,7 @@ function spliceTroveEventsFromLTerms(
 		});
 		cachedLTermSnapshotIndex = lastLTermsSnapshot.index;
 
-		const lastborrowingFees = getEventBeforComparator({
+		const lastborrowingFees = getEventBeforeComparator({
 			comparator: globalLTerms,
 			eventArray: user.borrowingFees,
 			startIndex: cachedborrowingFeesIndex,
@@ -319,6 +320,7 @@ function spliceTroveEventsFromLTerms(
 			coll: lastTrove.event!.coll,
 			debt: lastTrove.event!.debt,
 			stake: lastTrove.event!.stake,
+			collSurplus: lastTrove.event!.collSurplus,
 			fees: 0n,
 			lusdGasComp: global.LUSD_GAS_COMPENSATION,
 			collPending: pendingEthReward,
@@ -436,7 +438,7 @@ async function spliceStabilityPoolEventsFromPSAndG(
 		const [globalP, globalS, globalG] = globalPSG;
 		if (isBefore(globalG ?? globalP, timeline.stabilityPool[0]!)) continue;
 
-		const lastDeposit = getEventBeforComparator({
+		const lastDeposit = getEventBeforeComparator({
 			comparator: globalG ?? globalP,
 			eventArray: timeline.stabilityPool,
 			startIndex: cachedDeposit.index,
@@ -454,7 +456,7 @@ async function spliceStabilityPoolEventsFromPSAndG(
 
 		if (lastDeposit.event!.deposit === 0n) continue;
 
-		const lastPSGSnapshot = getEventBeforComparator({
+		const lastPSGSnapshot = getEventBeforeComparator({
 			comparator: globalG ?? globalP,
 			eventArray: user.PSGSnapshots,
 			startIndex: cachedPSGSnapshotIndex,
@@ -462,7 +464,7 @@ async function spliceStabilityPoolEventsFromPSAndG(
 		});
 		cachedPSGSnapshotIndex = lastPSGSnapshot.index;
 
-		const lastScaleSnapshot = getEventBeforComparator({
+		const lastScaleSnapshot = getEventBeforeComparator({
 			comparator: lastDeposit.event!,
 			eventArray: global.scale,
 			startIndex: cachedScaleSnapshotIndex,
@@ -470,7 +472,7 @@ async function spliceStabilityPoolEventsFromPSAndG(
 		});
 		cachedScaleSnapshotIndex = lastScaleSnapshot.index;
 
-		const lastEpochSnapshot = getEventBeforComparator({
+		const lastEpochSnapshot = getEventBeforeComparator({
 			comparator: lastDeposit.event!,
 			eventArray: global.epoch,
 			startIndex: cachedEpochSnapshotIndex,
@@ -478,7 +480,7 @@ async function spliceStabilityPoolEventsFromPSAndG(
 		});
 		cachedEpochSnapshotIndex = lastEpochSnapshot.index;
 
-		const lastFrontEndTag = getEventBeforComparator({
+		const lastFrontEndTag = getEventBeforeComparator({
 			comparator: globalG ?? globalP,
 			eventArray: user.frontEndTagChanges,
 			startIndex: cachedFrontEndTagIndex,
@@ -486,7 +488,7 @@ async function spliceStabilityPoolEventsFromPSAndG(
 		});
 		cachedFrontEndTagIndex = lastFrontEndTag.index;
 
-		const lastGlobalScale = getEventBeforComparator({
+		const lastGlobalScale = getEventBeforeComparator({
 			comparator: globalG ?? globalP,
 			eventArray: global.scale,
 			startIndex: cachedGlobalScaleIndex,
@@ -494,7 +496,7 @@ async function spliceStabilityPoolEventsFromPSAndG(
 		});
 		cachedGlobalScaleIndex = lastGlobalScale.index;
 
-		const lastGlobalEpoch = getEventBeforComparator({
+		const lastGlobalEpoch = getEventBeforeComparator({
 			comparator: globalG ?? globalP,
 			eventArray: global.epoch,
 			startIndex: cachedGlobalEpochIndex,
@@ -684,6 +686,7 @@ async function spliceStabilityPoolEventsFromPSAndG(
 			pendingEthGain: ethGain,
 			pendingLusdLoss: lusdLoss,
 			pendingLqtyReward: lqtyReward,
+			lqtyPaidOut: 0n,
 			operation: globalP
 				? ('3rdPartyLiquidationWithStabilityPoolOffset' as const)
 				: ('3rdPartyUserAction' as const),
@@ -724,7 +727,7 @@ function spliceLqtyStakingPoolEventsFromFTerms(
 	for (const f of globalFTerms) {
 		if (isBefore(f, timeline.lqtyStakingPool[0]!)) continue;
 
-		let lastStake = getEventBeforComparator({
+		let lastStake = getEventBeforeComparator({
 			comparator: f,
 			eventArray: timeline.lqtyStakingPool,
 			startIndex: cachedStake.index,
@@ -742,7 +745,7 @@ function spliceLqtyStakingPoolEventsFromFTerms(
 
 		if (lastStake.event!.stake === 0n) continue;
 
-		const lastStakerSnapshot = getEventBeforComparator({
+		const lastStakerSnapshot = getEventBeforeComparator({
 			comparator: f,
 			eventArray: user.FTermsSnapshots,
 			startIndex: cachedStakerSnapshotIndex,
@@ -805,7 +808,7 @@ type StateArray = (
 	| Timeline[keyof Timeline]
 )
 
-function getEventBeforComparator<T extends StateArray>({
+function getEventBeforeComparator<T extends StateArray>({
 	comparator,
 	eventArray,
 	startIndex,

@@ -113,7 +113,7 @@ export async function getGlobalState(
 	const DECIMAL_PRECISION = await client.readContract({
 		address: protocols[protocol].troveManager,
 		abi: [DECIMAL_PRECISIONAbi],
-		functionName: 'DECIMAL_PRECISION'
+		functionName: DECIMAL_PRECISIONAbi.name
 	});
 	await setCachedState(
 		protocol,
@@ -132,7 +132,7 @@ export async function getGlobalState(
 	const SCALE_FACTOR = await client.readContract({
 		address: protocols[protocol].stabilityPool,
 		abi: [SCALE_FACTORAbi],
-		functionName: 'SCALE_FACTOR'
+		functionName: SCALE_FACTORAbi.name
 	});
 	await setCachedState(protocol, ['global', 'SCALE_FACTOR'], SCALE_FACTOR);
 
@@ -141,13 +141,13 @@ export async function getGlobalState(
 	 ------------------------------------------------------------------------ */
 	const LUSD_GAS_COMPENSATIONAbi = getAbiItem(
 		protocol,
-		'stabilityPool',
+		'borrowerOperations',
 		'LUSD_GAS_COMPENSATION'
 	);
 	const LUSD_GAS_COMPENSATION = await client.readContract({
-		address: protocols[protocol].stabilityPool,
+		address: protocols[protocol].borrowerOperations,
 		abi: [LUSD_GAS_COMPENSATIONAbi],
-		functionName: 'LUSD_GAS_COMPENSATION'
+		functionName: LUSD_GAS_COMPENSATIONAbi.name
 	});
 	await setCachedState(
 		protocol,

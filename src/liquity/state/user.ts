@@ -185,16 +185,16 @@ export async function getUserState(
 		blockNumberToTimestampMap,
 		keyPath: [userAddress, 'borrowingFees'],
 		transform: (e) => {
-			const _LUSD_FEE = replaceBrandedWordsInString(
-				'_LUSD_FEE',
+			const _LUSDFee = replaceBrandedWordsInString(
+				'_LUSDFee',
 				protocols[protocol].modifiers
-			) as ReplaceBrandedWordsInStringForAllProtocols<'_LUSD_FEE'>;
+			) as ReplaceBrandedWordsInStringForAllProtocols<'_LUSDFee'>;
 
 			const lusdFee = e.args[
-				_LUSD_FEE as keyof typeof e.args
+				_LUSDFee as keyof typeof e.args
 			] as ExtractUnionValue<
 				typeof e.args,
-				ReplaceBrandedWordsInStringForAllProtocols<'_LUSD_FEE'>
+				ReplaceBrandedWordsInStringForAllProtocols<'_LUSDFee'>
 			>;
 			return {
 				fee: lusdFee!,

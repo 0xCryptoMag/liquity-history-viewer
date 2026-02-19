@@ -425,6 +425,12 @@ export async function setCachedArray<T = unknown>(
 	}
 }
 
+const GLOBAL_CONSTANT_KEYS = [
+	'DECIMAL_PRECISION',
+	'SCALE_FACTOR',
+	'LUSD_GAS_COMPENSATION'
+] as const;
+
 const GLOBAL_ARRAY_KEYS = [
 	'frontEndsRegistered',
 	'P',
@@ -439,10 +445,12 @@ const GLOBAL_ARRAY_KEYS = [
 
 const USER_ARRAY_KEYS = [
 	'userTroveUpdates',
+	'borrowingFees',
 	'collSurplusBalance',
 	'depositUpdates',
 	'PSGSnapshots',
 	'frontEndTagChanges',
+	'lqtyPayouts',
 	'systemTroveUpdates',
 	'LTermsSnapshots',
 	'stakeUpdates',
@@ -456,21 +464,16 @@ const USER_ARRAY_KEYS = [
 export async function exportGlobalCache(
 	protocol: ProtocolName
 ): Promise<string> {
-	const DECIMAL_PRECISION = await getCachedState<bigint>(protocol, [
-		'global',
-		'DECIMAL_PRECISION'
-	]);
-	const SCALE_FACTOR = await getCachedState<bigint>(protocol, [
-		'global',
-		'SCALE_FACTOR'
-	]);
-	const LUSD_GAS_COMPENSATION = await getCachedState<bigint>(protocol, [
-		'global',
-		'LUSD_GAS_COMPENSATION'
-	]);
-
-	const lastFetchedBlocks: Record<string, bigint | null> = {};
+	const constants: Record<string, bigint | null> = {};
 	const arrays: Record<string, unknown[]> = {};
+	const lastFetchedBlocks: Record<string, bigint | null> = {};
+
+	for (const key of GLOBAL_CONSTANT_KEYS) {
+		const value = await getCachedState<bigint>(protocol, ['global', key]);
+		if (value != null) {
+			constants[key] = value;
+		}
+	}
 
 	for (const key of GLOBAL_ARRAY_KEYS) {
 		arrays[key] = await readCachedArray(protocol, ['global', key]);
@@ -482,9 +485,7 @@ export async function exportGlobalCache(
 	}
 
 	const obj = {
-		DECIMAL_PRECISION,
-		SCALE_FACTOR,
-		LUSD_GAS_COMPENSATION,
+		...constants,
 		...arrays,
 		lastFetchedBlocks
 	};
@@ -500,8 +501,8 @@ export async function exportUserCache(
 	protocol: ProtocolName,
 	address: string
 ): Promise<string> {
-	const lastFetchedBlocks: Record<string, bigint | null> = {};
 	const arrays: Record<string, unknown[]> = {};
+	const lastFetchedBlocks: Record<string, bigint | null> = {};
 
 	for (const key of USER_ARRAY_KEYS) {
 		arrays[key] = await readCachedArray(protocol, [address, key]);
@@ -534,26 +535,11 @@ export async function importGlobalCache(
 
 	await clearCachedStateForBaseKey(protocol, 'global');
 
-	if (obj.DECIMAL_PRECISION != null) {
-		await setCachedState(
-			protocol,
-			['global', 'DECIMAL_PRECISION'],
-			obj.DECIMAL_PRECISION
-		);
-	}
-	if (obj.SCALE_FACTOR != null) {
-		await setCachedState(
-			protocol,
-			['global', 'SCALE_FACTOR'],
-			obj.SCALE_FACTOR
-		);
-	}
-	if (obj.LUSD_GAS_COMPENSATION != null) {
-		await setCachedState(
-			protocol,
-			['global', 'LUSD_GAS_COMPENSATION'],
-			obj.LUSD_GAS_COMPENSATION
-		);
+	for (const key of GLOBAL_CONSTANT_KEYS) {
+		const value = obj[key];
+		if (value != null) {
+			await setCachedState(protocol, ['global', key], value);
+		}
 	}
 
 	const lastFetchedBlocks = (obj.lastFetchedBlocks ?? {}) as Record<
@@ -652,186 +638,6 @@ export async function clearCachedStateForBaseKey(
 	}
 }
 
-export type CacheEntrySummary = {
-	protocol: string;
-	baseKey: string;
-	entryCount: number;
-};
-
-/**
- * Get a summary of all cache entries: unique (protocol, baseKey) pairs with entry counts.
- */
-export async function getCacheEntriesSummary(): Promise<CacheEntrySummary[]> {
-	const db = await getDB();
-	const transaction = db.transaction([STORE_NAME], 'readonly');
-	const store = transaction.objectStore(STORE_NAME);
-	const request = store.openCursor();
-
-	const counts = new Map<string, number>();
-
-	return new Promise((resolve, reject) => {
-		request.onsuccess = (event) => {
-			const cursor = (event.target as IDBRequest<IDBCursorWithValue>)
-				.result;
-			if (cursor) {
-				const { protocol, baseKey } = cursor.value;
-				const key = `${protocol}\0${baseKey}`;
-				counts.set(key, (counts.get(key) ?? 0) + 1);
-				cursor.continue();
-			} else {
-				const result: CacheEntrySummary[] = [];
-				for (const [key, entryCount] of counts) {
-					const parts = key.split('\0');
-					result.push({
-						protocol: parts[0] ?? '',
-						baseKey: parts[1] ?? '',
-						entryCount
-					});
-				}
-				result.sort(
-					(a, b) =>
-						a.protocol.localeCompare(b.protocol) ||
-						a.baseKey.localeCompare(b.baseKey)
-				);
-				resolve(result);
-			}
-		};
-		request.onerror = () => reject(request.error);
-	});
-}
-
-export type CacheEntryRow = {
-	protocol: string;
-	baseKey: string;
-	pathStr: string;
-	path: string[];
-	index: number;
-	isArrayItem: boolean;
-};
-
-export type ListCacheEntriesFilter = {
-	protocol?: ProtocolName;
-	baseKey?: string;
-};
-
-export type DisplayCacheEntry = {
-	protocol: string;
-	baseKey: string;
-	keyPath: string[];
-	isArray: boolean;
-	length?: number;
-};
-
-/**
- * List cache key paths for display: one entry per (protocol, baseKey, display path).
- * keyPath excludes a trailing 'lastFetchedBlock'. Arrays show isArray: true and length.
- */
-export async function listCacheKeyPathsForDisplay(
-	filter?: ListCacheEntriesFilter
-): Promise<DisplayCacheEntry[]> {
-	const rows = await listCacheEntries(filter);
-	// Drop rows where path ends with 'lastFetchedBlock'
-	const withoutLastFetched = rows.filter(
-		(row) => row.path[row.path.length - 1] !== 'lastFetchedBlock'
-	);
-	// Derive display path: if last segment is 'lastFetchedBlock' use path.slice(0, -1); else use path
-	// (we already filtered those out, so display path = path for remaining)
-	const pathStr = (path: string[]) => JSON.stringify(path);
-	const groups = new Map<
-		string,
-		{
-			protocol: string;
-			baseKey: string;
-			keyPath: string[];
-			maxIndex: number;
-		}
-	>();
-	for (const row of withoutLastFetched) {
-		const displayPath = row.path;
-		const key = `${row.protocol}\0${row.baseKey}\0${pathStr(displayPath)}`;
-		const existing = groups.get(key);
-		if (!existing) {
-			groups.set(key, {
-				protocol: row.protocol,
-				baseKey: row.baseKey,
-				keyPath: displayPath,
-				maxIndex:
-					row.isArrayItem && typeof row.index === 'number'
-						? row.index
-						: -1
-			});
-		} else if (row.isArrayItem && typeof row.index === 'number') {
-			existing.maxIndex = Math.max(existing.maxIndex, row.index);
-		}
-	}
-	return Array.from(groups.values()).map((g) => ({
-		protocol: g.protocol,
-		baseKey: g.baseKey,
-		keyPath: g.keyPath,
-		isArray: g.maxIndex >= 0,
-		...(g.maxIndex >= 0 && { length: g.maxIndex + 1 })
-	}));
-}
-
-/**
- * List cache entries, optionally filtered by protocol and/or baseKey.
- */
-export async function listCacheEntries(
-	filter?: ListCacheEntriesFilter
-): Promise<CacheEntryRow[]> {
-	const db = await getDB();
-	const transaction = db.transaction([STORE_NAME], 'readonly');
-	const store = transaction.objectStore(STORE_NAME);
-
-	const useIndex =
-		filter?.protocol !== undefined && filter?.baseKey !== undefined;
-	const request = useIndex
-		? store
-				.index('baseKey')
-				.openCursor(IDBKeyRange.only([filter.protocol, filter.baseKey]))
-		: filter?.protocol !== undefined
-		? store.index('protocol').openCursor(IDBKeyRange.only(filter.protocol))
-		: store.openCursor();
-
-	const rows: CacheEntryRow[] = [];
-
-	return new Promise((resolve, reject) => {
-		request.onsuccess = (event) => {
-			const cursor = (event.target as IDBRequest<IDBCursorWithValue>)
-				.result;
-			if (cursor) {
-				const { protocol, baseKey, pathStr, index } = cursor.value;
-				if (
-					filter?.baseKey !== undefined &&
-					filter?.protocol === undefined &&
-					baseKey !== filter.baseKey
-				) {
-					cursor.continue();
-					return;
-				}
-				let path: string[] = [];
-				try {
-					path = JSON.parse(pathStr) as string[];
-				} catch {
-					// ignore
-				}
-				rows.push({
-					protocol,
-					baseKey,
-					pathStr,
-					path,
-					index,
-					isArrayItem: typeof index === 'number' && index >= 0
-				});
-				cursor.continue();
-			} else {
-				resolve(rows);
-			}
-		};
-		request.onerror = () => reject(request.error);
-	});
-}
-
 /**
  * Clear all cached state for a protocol
  */
@@ -909,4 +715,185 @@ export async function deleteDatabase(): Promise<void> {
 			);
 		};
 	});
+}
+
+export type CacheEntrySummary = {
+	protocol: string;
+	baseKey: string;
+	entryCount: number;
+};
+
+/**
+ * Get a summary of all cache entries: unique (protocol, baseKey) pairs with entry counts.
+ */
+export async function getCacheEntriesSummary(): Promise<CacheEntrySummary[]> {
+	const db = await getDB();
+	const transaction = db.transaction([STORE_NAME], 'readonly');
+	const store = transaction.objectStore(STORE_NAME);
+	const request = store.openCursor();
+
+	const counts = new Map<string, number>();
+
+	return new Promise((resolve, reject) => {
+		request.onsuccess = (event) => {
+			const cursor = (event.target as IDBRequest<IDBCursorWithValue>)
+				.result;
+			if (cursor) {
+				const { protocol, baseKey } = cursor.value;
+				const key = `${protocol}\0${baseKey}`;
+				counts.set(key, (counts.get(key) ?? 0) + 1);
+				cursor.continue();
+			} else {
+				const result: CacheEntrySummary[] = [];
+				for (const [key, entryCount] of counts) {
+					const parts = key.split('\0');
+					result.push({
+						protocol: parts[0] ?? '',
+						baseKey: parts[1] ?? '',
+						entryCount
+					});
+				}
+				result.sort(
+					(a, b) =>
+						a.protocol.localeCompare(b.protocol) ||
+						a.baseKey.localeCompare(b.baseKey)
+				);
+				resolve(result);
+			}
+		};
+		request.onerror = () => reject(request.error);
+	});
+}
+
+export type CacheEntryRow = {
+	protocol: string;
+	baseKey: string;
+	pathStr: string;
+	path: string[];
+	index: number;
+	isArrayItem: boolean;
+};
+
+export type ListCacheEntriesFilter = {
+	protocol?: ProtocolName;
+	baseKey?: string;
+};
+
+export type CacheGroupRow = {
+	protocol: string;
+	baseKey: string;
+	keyPath: string[];
+	isArray: boolean;
+	length?: number;
+};
+
+/**
+ * List cache entries, optionally filtered by protocol and/or baseKey.
+ */
+export async function listCacheEntries(
+	filter?: ListCacheEntriesFilter
+): Promise<CacheEntryRow[]> {
+	const db = await getDB();
+	const transaction = db.transaction([STORE_NAME], 'readonly');
+	const store = transaction.objectStore(STORE_NAME);
+
+	const useIndex =
+		filter?.protocol !== undefined && filter?.baseKey !== undefined;
+	const request = useIndex
+		? store
+				.index('baseKey')
+				.openCursor(IDBKeyRange.only([filter.protocol, filter.baseKey]))
+		: filter?.protocol !== undefined
+		? store.index('protocol').openCursor(IDBKeyRange.only(filter.protocol))
+		: store.openCursor();
+
+	const rows: CacheEntryRow[] = [];
+
+	return new Promise((resolve, reject) => {
+		request.onsuccess = (event) => {
+			const cursor = (event.target as IDBRequest<IDBCursorWithValue>)
+				.result;
+			if (cursor) {
+				const { protocol, baseKey, pathStr, index } = cursor.value;
+				if (
+					filter?.baseKey !== undefined &&
+					filter?.protocol === undefined &&
+					baseKey !== filter.baseKey
+				) {
+					cursor.continue();
+					return;
+				}
+				let path: string[] = [];
+				try {
+					path = JSON.parse(pathStr) as string[];
+				} catch {
+					// ignore
+				}
+				rows.push({
+					protocol,
+					baseKey,
+					pathStr,
+					path,
+					index,
+					isArrayItem: typeof index === 'number' && index >= 0
+				});
+				cursor.continue();
+			} else {
+				resolve(rows);
+			}
+		};
+		request.onerror = () => reject(request.error);
+	});
+}
+
+/**
+ * List cache groups: one entry per (protocol, baseKey, array path).
+ * Excludes lastFetchedBlock and non-array entries (e.g. DECIMAL_PRECISION).
+ * Returns only array keypaths with their length.
+ */
+export async function listCacheGroups(
+	filter?: ListCacheEntriesFilter
+): Promise<CacheGroupRow[]> {
+	const rows = await listCacheEntries(filter);
+	const withoutLastFetched = rows.filter(
+		(row) => row.path[row.path.length - 1] !== 'lastFetchedBlock'
+	);
+	const pathStr = (path: string[]) => JSON.stringify(path);
+	const groups = new Map<
+		string,
+		{
+			protocol: string;
+			baseKey: string;
+			keyPath: string[];
+			maxIndex: number;
+		}
+	>();
+	for (const row of withoutLastFetched) {
+		const displayPath = row.path;
+		const key = `${row.protocol}\0${row.baseKey}\0${pathStr(displayPath)}`;
+		const existing = groups.get(key);
+		if (!existing) {
+			groups.set(key, {
+				protocol: row.protocol,
+				baseKey: row.baseKey,
+				keyPath: displayPath,
+				maxIndex:
+					row.isArrayItem && typeof row.index === 'number'
+						? row.index
+						: -1
+			});
+		} else if (row.isArrayItem && typeof row.index === 'number') {
+			existing.maxIndex = Math.max(existing.maxIndex, row.index);
+		}
+	}
+	// Only return array groups (exclude constants like DECIMAL_PRECISION)
+	return Array.from(groups.values())
+		.filter((g) => g.maxIndex >= 0)
+		.map((g) => ({
+			protocol: g.protocol,
+			baseKey: g.baseKey,
+			keyPath: g.keyPath,
+			isArray: true as const,
+			length: g.maxIndex + 1
+		}));
 }
